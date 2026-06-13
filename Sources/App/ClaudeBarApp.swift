@@ -83,6 +83,11 @@ struct ClaudeBarApp: App {
                     ClaudeAccountInfoResolver().resolve().map {
                         (email: $0.email, organization: $0.organization)
                     }
+                },
+                systemDefaultActivator: { configDir in
+                    // Swap the chosen account's token into the global Keychain item
+                    // so bare `claude` uses it (workspace untouched).
+                    ClaudeAccountActivator().activate(configDirectory: configDir)
                 }
             ),
             CodexProvider(

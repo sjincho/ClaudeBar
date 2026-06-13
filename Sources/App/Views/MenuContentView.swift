@@ -24,6 +24,7 @@ struct MenuContentView: View {
     @State private var showSharePass = false
     @State private var settings = AppSettings.shared
     @State private var hasRequestedNotificationPermission = false
+    @State private var accountToActivate: ProviderAccount?
 
     /// The currently selected provider ID (from monitor, which is @Observable)
     private var selectedProviderId: String {
@@ -448,8 +449,8 @@ struct MenuContentView: View {
     // MARK: - Cross-Account (Multi-Org) View
 
     /// Shows every configured account's usage stacked together, so the user
-    /// sees all orgs at once rather than switching between them. The "active"
-    /// account is the one that drives the menu-bar status indicator.
+    /// sees all orgs at once rather than switching between them. The "default"
+    /// account is the one bare `claude` uses (and that drives the menu-bar icon).
     private func allAccountsView(provider: any MultiAccountProvider) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(spacing: 12) {
@@ -463,6 +464,25 @@ struct MenuContentView: View {
             }
         }
         .frame(maxHeight: overviewMaxHeight)
+        .confirmationDialog(
+            "Make \(accountToActivate?.displayName ?? "this account") your default Claude login?",
+            isPresented: Binding(
+                get: { accountToActivate != nil },
+                set: { if !$0 { accountToActivate = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: accountToActivate
+        ) { account in
+            Button("Switch to \(account.displayName)") {
+                _ = provider.makeSystemDefault(accountId: account.accountId)
+                _ = provider.switchAccount(to: account.accountId)
+                accountToActivate = nil
+                Task { await refresh(providerId: provider.id) }
+            }
+            Button("Cancel", role: .cancel) { accountToActivate = nil }
+        } message: { _ in
+            Text("Bare `claude` will use this account's credentials. Your projects, history, and sessions are unchanged.")
+        }
     }
 
     @ViewBuilder
@@ -500,14 +520,13 @@ struct MenuContentView: View {
                 Spacer()
 
                 if isActive {
-                    Text("Active")
+                    Text("Default")
                         .badge(theme.statusHealthy)
-                } else {
+                } else if provider.canSetSystemDefault {
                     Button {
-                        _ = provider.switchAccount(to: account.accountId)
-                        Task { await refresh(providerId: provider.id) }
+                        accountToActivate = account
                     } label: {
-                        Text("Set active")
+                        Text("Make default")
                             .font(.system(size: 10, weight: .semibold, design: theme.fontDesign))
                             .foregroundStyle(theme.accentPrimary)
                             .padding(.horizontal, 10)
