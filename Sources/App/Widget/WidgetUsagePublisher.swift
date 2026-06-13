@@ -117,12 +117,15 @@ enum WidgetUsagePublisher {
                   let quota = snapshot.quota(for: kind.quotaType) else { continue }
             let weight = snapshot.budgetWeight ?? 1
             current.append((quota.percentUsed, weight))
-            if let r = projectedUsedPercent(quota, accountId: account.accountId, kind: kind, lookback: kind.windows.recent, now: now) {
-                recent.append((r, weight))
-            }
-            if let s = projectedUsedPercent(quota, accountId: account.accountId, kind: kind, lookback: kind.windows.sustained, now: now) {
-                sustained.append((s, weight))
-            }
+            // An account with a snapshot but no computable rate (idle, or too
+            // little history yet) is treated as flat — it lands at its current
+            // usage. Excluding it instead would bias the weighted combined toward
+            // whichever account happens to be moving (e.g. a busy Personal makes
+            // the combined recent equal Personal's, ignoring the idle orgs).
+            let r = projectedUsedPercent(quota, accountId: account.accountId, kind: kind, lookback: kind.windows.recent, now: now)
+            recent.append((r ?? quota.percentUsed, weight))
+            let s = projectedUsedPercent(quota, accountId: account.accountId, kind: kind, lookback: kind.windows.sustained, now: now)
+            sustained.append((s ?? quota.percentUsed, weight))
         }
         guard let currentUsed = weightedAverage(current) else { return nil }
         func proj(_ pairs: [(value: Double, weight: Double)]) -> WidgetProjection? {
