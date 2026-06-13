@@ -66,6 +66,21 @@ let project = Project(
             )
         ),
 
+        // MARK: - Widget Shared (code shared by app + widget extension)
+        .target(
+            name: "WidgetShared",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.tddworks.claudebar.widgetshared",
+            deploymentTargets: .macOS("15.0"),
+            sources: ["Sources/WidgetShared/**"],
+            settings: .settings(
+                base: [
+                    "SWIFT_STRICT_CONCURRENCY": "complete",
+                ]
+            )
+        ),
+
         // MARK: - Main Application
         .target(
             name: "ClaudeBar",
@@ -82,6 +97,7 @@ let project = Project(
             dependencies: [
                 .target(name: "Domain"),
                 .target(name: "Infrastructure"),
+                .target(name: "WidgetShared"),
                 .external(name: "Sparkle"),
             ],
             settings: .settings(

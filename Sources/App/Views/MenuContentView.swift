@@ -850,6 +850,7 @@ struct MenuContentView: View {
                 }
             }
         }
+        WidgetUsagePublisher.publish(from: monitor)
     }
 
     /// Refresh a specific provider by ID
@@ -870,6 +871,7 @@ struct MenuContentView: View {
                 // Provider stores error in lastError
             }
         }
+        WidgetUsagePublisher.publish(from: monitor)
     }
 
     /// Fetch guest passes and show the share view

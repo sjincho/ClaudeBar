@@ -345,7 +345,9 @@ struct ClaudeBarApp: App {
                 )
                 for await _ in stream {
                     // QuotaMonitor updates provider snapshots; the menu-bar label
-                    // re-renders from observable state — nothing to do per event.
+                    // re-renders from observable state. Mirror the latest usage to
+                    // the desktop widget so it stays fresh while the popover is closed.
+                    WidgetUsagePublisher.publish(from: monitor)
                 }
             }
         }
