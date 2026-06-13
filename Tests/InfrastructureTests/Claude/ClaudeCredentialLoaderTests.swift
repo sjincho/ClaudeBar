@@ -224,6 +224,76 @@ struct ClaudeCredentialLoaderTests {
         #expect(reloaded?.oauth.refreshToken == "new-refresh")
     }
 
+    @Test
+    func `saveCredentials preserves mcpOAuth and unmanaged claudeAiOauth fields`() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let claudeDir = tempDir.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let filePath = claudeDir.appendingPathComponent(".credentials.json")
+        let blob: [String: Any] = [
+            "claudeAiOauth": [
+                "accessToken": "old-token",
+                "refreshToken": "old-refresh",
+                "scopes": ["user:inference", "user:profile"],
+                "rateLimitTier": "default_claude_max_20x",
+            ],
+            "mcpOAuth": [
+                "slack": ["accessToken": "slack-tok", "refreshToken": "slack-ref"],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: blob).write(to: filePath)
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        var result = loader.loadCredentials()!
+        result.oauth.accessToken = "new-token"
+        loader.saveCredentials(result)
+
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: filePath)) as! [String: Any]
+        let oauth = saved["claudeAiOauth"] as! [String: Any]
+        let slack = (saved["mcpOAuth"] as? [String: Any])?["slack"] as? [String: Any]
+        #expect(oauth["accessToken"] as? String == "new-token")
+        // Unmanaged claudeAiOauth fields survive (the old rebuild dropped these).
+        #expect(oauth["scopes"] as? [String] == ["user:inference", "user:profile"])
+        #expect(oauth["rateLimitTier"] as? String == "default_claude_max_20x")
+        // The section we don't own is untouched.
+        #expect(slack?["accessToken"] as? String == "slack-tok")
+    }
+
+    @Test
+    func `saveCredentials merges onto the live file, not the stale snapshot`() throws {
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let claudeDir = tempDir.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let filePath = claudeDir.appendingPathComponent(".credentials.json")
+        func writeBlob(mcpToken: String) throws {
+            let blob: [String: Any] = [
+                "claudeAiOauth": ["accessToken": "tok", "refreshToken": "ref"],
+                "mcpOAuth": ["slack": ["accessToken": mcpToken]],
+            ]
+            try JSONSerialization.data(withJSONObject: blob).write(to: filePath)
+        }
+        try writeBlob(mcpToken: "slack-v1")
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        var result = loader.loadCredentials()!  // snapshot captured with mcpOAuth = slack-v1
+
+        // The live `claude` agent rotates the MCP token after we loaded.
+        try writeBlob(mcpToken: "slack-v2")
+
+        result.oauth.accessToken = "rotated-token"
+        loader.saveCredentials(result)
+
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: filePath)) as! [String: Any]
+        let slack = (saved["mcpOAuth"] as? [String: Any])?["slack"] as? [String: Any]
+        // The fresh on-disk MCP token must win — not reverted to the stale snapshot.
+        #expect(slack?["accessToken"] as? String == "slack-v2")
+        #expect((saved["claudeAiOauth"] as? [String: Any])?["accessToken"] as? String == "rotated-token")
+    }
+
     // MARK: - Environment Variable Tests
 
     @Test

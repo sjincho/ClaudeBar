@@ -139,19 +139,27 @@ public struct ClaudeCredentialLoader: Sendable {
         return nowMs + Self.refreshBufferMs >= expiresAt
     }
 
-    /// Saves updated credentials back to the original source.
+    /// Persists a refreshed token back to its source, touching ONLY the token.
+    ///
+    /// Critically, this re-reads the live on-disk blob at save time and merges the
+    /// new access/refresh/expiry values into its existing `claudeAiOauth` — rather
+    /// than writing the (up to 5 min stale) `fullData` snapshot wholesale. The
+    /// shared `Claude Code-credentials` item also holds `mcpOAuth` (MCP server
+    /// tokens, e.g. Slack), which the live `claude` agent rotates independently;
+    /// writing a stale snapshot would silently revert those to an old copy and
+    /// break the agent's MCP sessions until the user re-runs `/login`. Merging onto
+    /// the freshest copy also preserves `claudeAiOauth` fields we don't manage
+    /// (scopes, rateLimitTier, …) that the old rebuild dropped.
     public func saveCredentials(_ result: ClaudeCredentialResult) {
         // Environment credentials are read-only (set via env var, not persisted by us)
-        if result.source == .environment {
-            return
-        }
+        guard result.source != .environment else { return }
 
-        var updatedData = result.fullData
+        // Merge onto the live blob; fall back to the passed-in snapshot only if the
+        // current copy can't be read (e.g. item just deleted).
+        var merged = currentStoredData(for: result.source) ?? result.fullData
 
-        // Update the OAuth section
-        var oauthDict: [String: Any] = [
-            "accessToken": result.oauth.accessToken
-        ]
+        var oauthDict = (merged["claudeAiOauth"] as? [String: Any]) ?? [:]
+        oauthDict["accessToken"] = result.oauth.accessToken
         if let refreshToken = result.oauth.refreshToken {
             oauthDict["refreshToken"] = refreshToken
         }
@@ -161,15 +169,48 @@ public struct ClaudeCredentialLoader: Sendable {
         if let subscriptionType = result.oauth.subscriptionType {
             oauthDict["subscriptionType"] = subscriptionType
         }
-        updatedData["claudeAiOauth"] = oauthDict
+        merged["claudeAiOauth"] = oauthDict
 
         switch result.source {
         case .environment:
             return  // Already handled above, but satisfy exhaustive switch
         case .file:
-            saveToFile(updatedData)
+            saveToFile(merged)
         case .keychain:
-            saveToKeychain(updatedData)
+            saveToKeychain(merged)
+        }
+    }
+
+    /// Reads the current raw credential blob from the given source without
+    /// requiring a valid token (unlike `load*`). Used to merge a refreshed token
+    /// onto the freshest on-disk copy at save time, so sibling sections we don't
+    /// own (notably `mcpOAuth`) are never clobbered with a stale snapshot.
+    private func currentStoredData(for source: CredentialSource) -> [String: Any]? {
+        switch source {
+        case .file:
+            let path = credentialsFilePath
+            guard FileManager.default.fileExists(atPath: path),
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return json
+        case .keychain:
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var item: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+                  let data = item as? Data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            return json
+        case .environment:
+            return nil
         }
     }
 
