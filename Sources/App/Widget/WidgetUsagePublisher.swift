@@ -19,7 +19,14 @@ enum WidgetUsagePublisher {
         let mode = AppSettings.shared.usageDisplayMode
         let accounts: [WidgetAccountUsage] = provider.accounts.map { account in
             let snapshot = provider.accountSnapshots[account.accountId]
-            let quotas: [WidgetQuota] = (snapshot?.quotas ?? []).map { quota in
+            let quotas: [WidgetQuota] = (snapshot?.quotas ?? [])
+                .filter { quota in
+                    // Drop model-specific quotas (e.g. Sonnet) — the widget shows
+                    // just Session + Weekly to stay uncluttered.
+                    if case .modelSpecific = quota.quotaType { return false }
+                    return true
+                }
+                .map { quota in
                 WidgetQuota(
                     label: quota.quotaType.displayName,
                     percentRemaining: quota.percentRemaining,

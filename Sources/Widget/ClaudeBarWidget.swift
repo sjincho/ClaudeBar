@@ -114,7 +114,7 @@ struct ClaudeUsageWidgetView: View {
     /// Large family: account name + one labeled bar per quota (Session, Weekly, …).
     @ViewBuilder
     private func accountDetail(_ account: WidgetAccountUsage) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 Text(account.label)
                     .font(.system(size: 11, weight: account.isActive ? .semibold : .medium))
@@ -129,23 +129,23 @@ struct ClaudeUsageWidgetView: View {
             if account.quotas.isEmpty {
                 Text("—").font(.system(size: 9)).foregroundStyle(.secondary)
             } else {
-                ForEach(account.quotas.prefix(3), id: \.label) { quota in
-                    HStack(spacing: 6) {
+                ForEach(account.quotas.prefix(2), id: \.label) { quota in
+                    HStack(spacing: 8) {
                         Text(quota.label)
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .frame(width: 58, alignment: .leading)
+                            .frame(width: 46, alignment: .leading)
                         bar(percent: quota.displayPercent, status: quota.status)
                         Text("\(Int(quota.displayPercent.rounded()))%")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 30, alignment: .trailing)
+                            .frame(width: 28, alignment: .trailing)
                     }
                 }
             }
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
     }
 
     private func bar(percent: Double, status: WidgetQuotaStatus) -> some View {
@@ -157,7 +157,7 @@ struct ClaudeUsageWidgetView: View {
                     .frame(width: geo.size.width * fraction)
             }
         }
-        .frame(height: 6)
+        .frame(height: 9)
         .frame(maxWidth: .infinity)
     }
 
