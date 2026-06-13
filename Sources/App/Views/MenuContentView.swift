@@ -448,8 +448,8 @@ struct MenuContentView: View {
     // MARK: - Cross-Account (Multi-Org) View
 
     /// Shows every configured account's usage stacked together, so the user
-    /// sees all orgs at once rather than switching between them. The account
-    /// that the `claude` CLI uses by default is marked and can be changed.
+    /// sees all orgs at once rather than switching between them. The "active"
+    /// account is the one that drives the menu-bar status indicator.
     private func allAccountsView(provider: any MultiAccountProvider) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(spacing: 12) {
@@ -500,14 +500,14 @@ struct MenuContentView: View {
                 Spacer()
 
                 if isActive {
-                    Text("Default")
+                    Text("Active")
                         .badge(theme.statusHealthy)
                 } else {
                     Button {
                         _ = provider.switchAccount(to: account.accountId)
                         Task { await refresh(providerId: provider.id) }
                     } label: {
-                        Text("Set default")
+                        Text("Set active")
                             .font(.system(size: 10, weight: .semibold, design: theme.fontDesign))
                             .foregroundStyle(theme.accentPrimary)
                             .padding(.horizontal, 10)
