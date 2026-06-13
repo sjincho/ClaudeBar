@@ -16,6 +16,9 @@ public struct UsageSnapshot: Sendable, Equatable {
     public let accountEmail: String?
     public let accountOrganization: String?
     public let loginMethod: String?
+    /// Relative budget weight from the account's rate-limit tier (Max 20x → 20,
+    /// Team seat 5x → 5), for weighting cross-account aggregates. nil if unknown.
+    public let budgetWeight: Double?
 
     /// The account tier (e.g., Claude Max, Pro, or custom tier from other providers)
     public let accountTier: AccountTier?
@@ -41,6 +44,7 @@ public struct UsageSnapshot: Sendable, Equatable {
         accountEmail: String? = nil,
         accountOrganization: String? = nil,
         loginMethod: String? = nil,
+        budgetWeight: Double? = nil,
         accountTier: AccountTier? = nil,
         costUsage: CostUsage? = nil,
         bedrockUsage: BedrockUsageSummary? = nil,
@@ -53,6 +57,7 @@ public struct UsageSnapshot: Sendable, Equatable {
         self.accountEmail = accountEmail
         self.accountOrganization = accountOrganization
         self.loginMethod = loginMethod
+        self.budgetWeight = budgetWeight
         self.accountTier = accountTier
         self.costUsage = costUsage
         self.bedrockUsage = bedrockUsage
@@ -63,7 +68,7 @@ public struct UsageSnapshot: Sendable, Equatable {
     /// Returns a copy with account identity (email/organization) filled in. Used
     /// when the usage source (e.g. the OAuth usage API) doesn't carry identity but
     /// it can be resolved separately from the account's local config.
-    public func withAccountIdentity(email: String?, organization: String?) -> UsageSnapshot {
+    public func withAccountIdentity(email: String?, organization: String?, budgetWeight: Double? = nil) -> UsageSnapshot {
         UsageSnapshot(
             providerId: providerId,
             quotas: quotas,
@@ -71,6 +76,7 @@ public struct UsageSnapshot: Sendable, Equatable {
             accountEmail: email ?? accountEmail,
             accountOrganization: organization ?? accountOrganization,
             loginMethod: loginMethod,
+            budgetWeight: budgetWeight ?? self.budgetWeight,
             accountTier: accountTier,
             costUsage: costUsage,
             bedrockUsage: bedrockUsage,

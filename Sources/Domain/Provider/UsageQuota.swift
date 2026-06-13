@@ -110,6 +110,25 @@ public struct UsageQuota: Sendable, Equatable, Hashable, Comparable {
         }
     }
 
+    /// Projected `percentUsed` by reset, extrapolating the current pace linearly
+    /// (used ÷ fraction-of-window-elapsed). May exceed 100 when over pace. nil when
+    /// there's no reset time, or it's too early in the window to project meaningfully.
+    public var projectedUsedPercent: Double? {
+        guard let percentTimeElapsed, percentTimeElapsed >= 5 else { return nil }
+        return percentUsed * 100 / percentTimeElapsed
+    }
+
+    /// The projected value at reset in the given display mode's terms — mirrors
+    /// `displayPercent(mode:)`. Used mode grows toward/past 100; remaining/pace
+    /// shrink (and can go negative when projected over budget).
+    public func displayProjectedPercent(mode: UsageDisplayMode) -> Double? {
+        guard let projected = projectedUsedPercent else { return nil }
+        switch mode {
+        case .used: return projected
+        case .remaining, .pace: return 100 - projected
+        }
+    }
+
     // MARK: - Burn Rate
 
     /// The burn rate: how fast quota is being consumed relative to time elapsed.

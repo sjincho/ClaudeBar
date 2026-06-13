@@ -9,95 +9,92 @@ public enum WidgetQuotaStatus: String, Codable, Sendable {
     case depleted
 }
 
-/// One quota gauge for an account (e.g. Session, Weekly, Sonnet).
-public struct WidgetQuota: Codable, Sendable, Hashable {
-    public let label: String
-    /// Raw remaining percent — used to pick the most-depleted ("lowest") quota
-    /// and for status/color, independent of the display mode.
-    public let percentRemaining: Double
-    /// The number to show + bar fill, already resolved for the app's display
-    /// mode (remaining vs used) so the widget doesn't need the setting.
-    public let displayPercent: Double
+/// A pace projection ("where you'll land at reset") for a quota.
+public struct WidgetProjection: Codable, Sendable, Equatable {
+    /// Projected percent in the active display mode's terms (may exceed 100, used mode).
+    public let value: Double
+    /// Severity of the projected value (so an over-budget projection reads red).
     public let status: WidgetQuotaStatus
 
-    public init(label: String, percentRemaining: Double, displayPercent: Double, status: WidgetQuotaStatus) {
-        self.label = label
-        self.percentRemaining = percentRemaining
-        self.displayPercent = displayPercent
+    public init(value: Double, status: WidgetQuotaStatus) {
+        self.value = value
         self.status = status
     }
 }
 
-/// A single account's usage as shown in the widget.
-public struct WidgetAccountUsage: Codable, Sendable, Identifiable, Hashable {
+/// One quota gauge (Session or Weekly) with current usage and up to two pace
+/// projections (recent = shorter window, sustained = longer window).
+public struct WidgetQuota: Codable, Sendable, Equatable {
+    public let label: String
+    /// Current value in the active display mode's terms (the bar fill + number).
+    public let displayPercent: Double
+    public let status: WidgetQuotaStatus
+    public let recent: WidgetProjection?
+    public let sustained: WidgetProjection?
+
+    public init(
+        label: String,
+        displayPercent: Double,
+        status: WidgetQuotaStatus,
+        recent: WidgetProjection? = nil,
+        sustained: WidgetProjection? = nil
+    ) {
+        self.label = label
+        self.displayPercent = displayPercent
+        self.status = status
+        self.recent = recent
+        self.sustained = sustained
+    }
+}
+
+/// A single account's Session + Weekly usage.
+public struct WidgetAccountUsage: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public let label: String
     public let subtitle: String?
     public let isActive: Bool
-    public let quotas: [WidgetQuota]
+    public let session: WidgetQuota?
+    public let weekly: WidgetQuota?
 
-    public init(
-        id: String,
-        label: String,
-        subtitle: String?,
-        isActive: Bool,
-        quotas: [WidgetQuota]
-    ) {
+    public init(id: String, label: String, subtitle: String?, isActive: Bool, session: WidgetQuota?, weekly: WidgetQuota?) {
         self.id = id
         self.label = label
         self.subtitle = subtitle
         self.isActive = isActive
-        self.quotas = quotas
-    }
-
-    /// The lowest remaining quota — the binding constraint for a compact view.
-    public var lowestQuota: WidgetQuota? {
-        quotas.min { $0.percentRemaining < $1.percentRemaining }
+        self.session = session
+        self.weekly = weekly
     }
 }
 
-/// The full payload the app serves over loopback HTTP and the widget fetches on
-/// its timeline.
+/// The full payload the app serves over loopback and the widget fetches.
 public struct WidgetUsagePayload: Codable, Sendable {
-    public let accounts: [WidgetAccountUsage]
+    /// Budget-weighted aggregate across all accounts.
+    public let combinedSession: WidgetQuota?
+    public let combinedWeekly: WidgetQuota?
+    /// The active account (the one bare `claude` uses), shown in detail.
+    public let activeAccount: WidgetAccountUsage?
+    /// Remaining accounts, pre-sorted by least used (Session first, then Weekly).
+    public let otherAccounts: [WidgetAccountUsage]
     public let updatedAt: Date
-    /// "Remaining" or "Used" — how `displayPercent` should be labelled, mirroring
-    /// the app's usage display mode. Defaults to "Remaining" for older payloads.
+    /// "Remaining" or "Used" — mirrors the app's usage display mode.
     public let displayModeLabel: String
-    /// Machine-wide token projections (not per-account): tokens this day/week at
-    /// the recent pace. Nil when unavailable.
-    public let estimatedDailyTokens: Int?
-    public let estimatedWeeklyTokens: Int?
 
     public init(
-        accounts: [WidgetAccountUsage],
+        combinedSession: WidgetQuota?,
+        combinedWeekly: WidgetQuota?,
+        activeAccount: WidgetAccountUsage?,
+        otherAccounts: [WidgetAccountUsage],
         updatedAt: Date,
-        displayModeLabel: String = "Remaining",
-        estimatedDailyTokens: Int? = nil,
-        estimatedWeeklyTokens: Int? = nil
+        displayModeLabel: String = "Remaining"
     ) {
-        self.accounts = accounts
+        self.combinedSession = combinedSession
+        self.combinedWeekly = combinedWeekly
+        self.activeAccount = activeAccount
+        self.otherAccounts = otherAccounts
         self.updatedAt = updatedAt
         self.displayModeLabel = displayModeLabel
-        self.estimatedDailyTokens = estimatedDailyTokens
-        self.estimatedWeeklyTokens = estimatedWeeklyTokens
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case accounts, updatedAt, displayModeLabel, estimatedDailyTokens, estimatedWeeklyTokens
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        accounts = try c.decode([WidgetAccountUsage].self, forKey: .accounts)
-        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
-        displayModeLabel = try c.decodeIfPresent(String.self, forKey: .displayModeLabel) ?? "Remaining"
-        estimatedDailyTokens = try c.decodeIfPresent(Int.self, forKey: .estimatedDailyTokens)
-        estimatedWeeklyTokens = try c.decodeIfPresent(Int.self, forKey: .estimatedWeeklyTokens)
-    }
-
-    /// Encodes for transport (ISO-8601 dates). App and widget share this so the
-    /// formats can't drift.
     public func encoded() -> Data? {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

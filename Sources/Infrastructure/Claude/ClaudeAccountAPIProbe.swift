@@ -22,7 +22,11 @@ public struct ClaudeAccountAPIProbe: UsageProbe {
     public func probe() async throws -> UsageSnapshot {
         let snapshot = try await apiProbe.probe()
         let info = resolver.resolve()
-        return snapshot.withAccountIdentity(email: info?.email, organization: info?.organization)
+        return snapshot.withAccountIdentity(
+            email: info?.email,
+            organization: info?.organization,
+            budgetWeight: info?.budgetWeight
+        )
     }
 
     public func isAvailable() async -> Bool {
