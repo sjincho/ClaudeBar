@@ -352,17 +352,14 @@ struct MenuContentView: View {
             } else {
                 overviewContent(providers: providers)
             }
+        } else if let provider = selectedProvider,
+                  let multiAccountProvider = provider as? (any MultiAccountProvider),
+                  multiAccountProvider.accounts.count > 1 {
+            allAccountsView(provider: multiAccountProvider)
+                .opacity(animateIn ? 1 : 0)
+                .animation(.easeOut(duration: 0.5).delay(0.2), value: animateIn)
         } else if let provider = selectedProvider, let snapshot = provider.snapshot {
             VStack(spacing: 12) {
-                if let multiAccountProvider = provider as? (any MultiAccountProvider),
-                   multiAccountProvider.accounts.count > 1 {
-                    AccountPickerView(provider: multiAccountProvider) { accountId in
-                        _ = multiAccountProvider.switchAccount(to: accountId)
-                        Task {
-                            await refresh(providerId: provider.id)
-                        }
-                    }
-                }
                 if let displayName = snapshot.accountEmail ?? snapshot.accountOrganization {
                     accountCard(displayName: displayName, snapshot: snapshot)
                 }
@@ -447,6 +444,98 @@ struct MenuContentView: View {
         .padding(.vertical, 4)
     }
 
+
+    // MARK: - Cross-Account (Multi-Org) View
+
+    /// Shows every configured account's usage stacked together, so the user
+    /// sees all orgs at once rather than switching between them. The account
+    /// that the `claude` CLI uses by default is marked and can be changed.
+    private func allAccountsView(provider: any MultiAccountProvider) -> some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(spacing: 12) {
+                ForEach(Array(provider.accounts.enumerated()), id: \.element.id) { index, account in
+                    if index > 0 {
+                        Divider()
+                            .background(theme.glassBorder)
+                    }
+                    accountUsageSection(provider: provider, account: account)
+                }
+            }
+        }
+        .frame(maxHeight: overviewMaxHeight)
+    }
+
+    @ViewBuilder
+    private func accountUsageSection(
+        provider: any MultiAccountProvider,
+        account: ProviderAccount
+    ) -> some View {
+        let isActive = account.accountId == provider.activeAccount.accountId
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(isActive ? theme.accentPrimary : theme.glassBackground)
+                        .frame(width: 28, height: 28)
+
+                    Text(account.initialLetter)
+                        .font(.system(size: 12, weight: .bold, design: theme.fontDesign))
+                        .foregroundStyle(isActive ? .white : theme.textSecondary)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(account.displayName)
+                        .font(.system(size: 13, weight: .semibold, design: theme.fontDesign))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+
+                    if let subtitle = account.email ?? account.organization {
+                        Text(subtitle)
+                            .font(.system(size: 10, weight: .medium, design: theme.fontDesign))
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                if isActive {
+                    Text("Default")
+                        .badge(theme.statusHealthy)
+                } else {
+                    Button {
+                        _ = provider.switchAccount(to: account.accountId)
+                        Task { await refresh(providerId: provider.id) }
+                    } label: {
+                        Text("Set default")
+                            .font(.system(size: 10, weight: .semibold, design: theme.fontDesign))
+                            .foregroundStyle(theme.accentPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .stroke(theme.accentPrimary.opacity(0.5), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            if let snapshot = provider.accountSnapshots[account.accountId] {
+                statsGrid(snapshot: snapshot)
+            } else if provider.isSyncing {
+                LoadingSpinnerView()
+            } else {
+                Text("No usage data yet")
+                    .font(.system(size: 11, weight: .medium, design: theme.fontDesign))
+                    .foregroundStyle(theme.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 6)
+            }
+        }
+    }
 
     private func accountCard(displayName: String, snapshot: UsageSnapshot) -> some View {
         HStack(spacing: 10) {
