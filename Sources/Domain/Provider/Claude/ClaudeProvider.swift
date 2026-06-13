@@ -111,27 +111,6 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         return cachedDefaultInfo
     }
 
-    /// Makes the OS-level `claude` CLI default to a given account (by swapping the
-    /// account credential in the shared Keychain). Injected so the domain stays
-    /// free of Keychain specifics; nil when not supported (e.g. in tests).
-    private let systemDefaultActivator: (@Sendable (_ configDirectory: String) -> Bool)?
-
-    /// Whether `makeSystemDefault(accountId:)` is supported in this build.
-    public var canSetSystemDefault: Bool { systemDefaultActivator != nil }
-
-    /// Makes the bare `claude` CLI authenticate as the given account — swapping
-    /// only the credential, leaving the `~/.claude` workspace intact. Returns
-    /// false if unsupported, the account is unknown, or it has no config dir.
-    @discardableResult
-    public func makeSystemDefault(accountId: String) -> Bool {
-        guard let systemDefaultActivator,
-              let config = accountConfigs.first(where: { $0.accountId == accountId }),
-              let configDir = claudeConfigDirectoryPath(for: config) else {
-            return false
-        }
-        return systemDefaultActivator(configDir)
-    }
-
     /// The API probe for fetching usage data via HTTP API (optional)
     private let apiProbe: (any UsageProbe)?
 
@@ -251,8 +230,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         settingsRepository: any ProviderSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
         cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
-        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil,
-        systemDefaultActivator: (@Sendable (_ configDirectory: String) -> Bool)? = nil
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil
     ) {
         self.cliProbe = probe
         self.cliProbeFactory = cliProbeFactory ?? { _ in probe }
@@ -261,7 +239,6 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         self.settingsRepository = settingsRepository
         self.dailyUsageAnalyzer = dailyUsageAnalyzer
         self.defaultAccountInfoProvider = defaultAccountInfoProvider
-        self.systemDefaultActivator = systemDefaultActivator
         // Load persisted enabled state (defaults to true)
         self.isEnabled = settingsRepository.isEnabled(forProvider: "claude")
     }
@@ -279,8 +256,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         settingsRepository: any ClaudeSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
         cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
-        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil,
-        systemDefaultActivator: (@Sendable (_ configDirectory: String) -> Bool)? = nil
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil
     ) {
         self.cliProbe = cliProbe
         self.cliProbeFactory = cliProbeFactory ?? { _ in cliProbe }
@@ -289,7 +265,6 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         self.settingsRepository = settingsRepository
         self.dailyUsageAnalyzer = dailyUsageAnalyzer
         self.defaultAccountInfoProvider = defaultAccountInfoProvider
-        self.systemDefaultActivator = systemDefaultActivator
         // Load persisted enabled state (defaults to true)
         self.isEnabled = settingsRepository.isEnabled(forProvider: "claude")
     }

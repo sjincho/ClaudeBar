@@ -57,16 +57,6 @@ public protocol MultiAccountProvider: AIProvider {
 
     /// The account with the most remaining quota (best candidate for use).
     var bestAvailableAccount: ProviderAccount? { get }
-
-    /// Whether this provider can change the OS-level default account (e.g. swap
-    /// which account the underlying CLI authenticates as). Defaults to false.
-    var canSetSystemDefault: Bool { get }
-
-    /// Makes the given account the OS-level default — swapping only the
-    /// credential, leaving local workspace/config intact. Returns true on
-    /// success. Defaults to a no-op returning false.
-    @discardableResult
-    func makeSystemDefault(accountId: String) -> Bool
 }
 
 // MARK: - Default Implementations
@@ -84,13 +74,6 @@ public extension MultiAccountProvider {
     func refreshAllAccounts(_ kind: RefreshKind) async {
         await refreshAllAccounts()
     }
-
-    /// Default: providers can't change the OS-level default account.
-    var canSetSystemDefault: Bool { false }
-
-    /// Default: no-op (not supported).
-    @discardableResult
-    func makeSystemDefault(accountId: String) -> Bool { false }
 
     /// Default: aggregate status is the worst across all account snapshots
     var aggregateStatus: QuotaStatus {

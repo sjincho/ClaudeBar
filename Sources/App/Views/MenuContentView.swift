@@ -24,7 +24,6 @@ struct MenuContentView: View {
     @State private var showSharePass = false
     @State private var settings = AppSettings.shared
     @State private var hasRequestedNotificationPermission = false
-    @State private var accountToActivate: ProviderAccount?
 
     /// The currently selected provider ID (from monitor, which is @Observable)
     private var selectedProviderId: String {
@@ -464,25 +463,6 @@ struct MenuContentView: View {
             }
         }
         .frame(maxHeight: overviewMaxHeight)
-        .confirmationDialog(
-            "Make \(accountToActivate?.displayName ?? "this account") your default Claude login?",
-            isPresented: Binding(
-                get: { accountToActivate != nil },
-                set: { if !$0 { accountToActivate = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: accountToActivate
-        ) { account in
-            Button("Switch to \(account.displayName)") {
-                _ = provider.makeSystemDefault(accountId: account.accountId)
-                _ = provider.switchAccount(to: account.accountId)
-                accountToActivate = nil
-                Task { await refresh(providerId: provider.id) }
-            }
-            Button("Cancel", role: .cancel) { accountToActivate = nil }
-        } message: { _ in
-            Text("Bare `claude` will use this account's credentials. Your projects, history, and sessions are unchanged.")
-        }
     }
 
     @ViewBuilder
@@ -522,21 +502,6 @@ struct MenuContentView: View {
                 if isActive {
                     Text("Default")
                         .badge(theme.statusHealthy)
-                } else if provider.canSetSystemDefault {
-                    Button {
-                        accountToActivate = account
-                    } label: {
-                        Text("Make default")
-                            .font(.system(size: 10, weight: .semibold, design: theme.fontDesign))
-                            .foregroundStyle(theme.accentPrimary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule()
-                                    .stroke(theme.accentPrimary.opacity(0.5), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 4)
