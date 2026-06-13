@@ -8,6 +8,13 @@ import WidgetShared
 /// widget tracks the same data the menu shows.
 @MainActor
 enum WidgetUsagePublisher {
+    // The token estimate needs the daily JSONL scan, which only runs on
+    // interactive refreshes (background ticks skip it to stay cheap). Cache the
+    // last computed value so background refreshes don't blank it out — it
+    // refreshes whenever the user opens the menu.
+    private static var lastEstimatedDailyTokens: Int?
+    private static var lastEstimatedWeeklyTokens: Int?
+
     static func publish(from monitor: QuotaMonitor, now: Date = Date()) {
         guard let provider = monitor.provider(for: "claude") as? (any MultiAccountProvider) else {
             return
@@ -43,7 +50,19 @@ enum WidgetUsagePublisher {
             )
         }
         let modeLabel = mode == .used ? "Used" : "Remaining"
-        let payload = WidgetUsagePayload(accounts: accounts, updatedAt: now, displayModeLabel: modeLabel)
+        // Token pace projection is machine-wide; it rides the active account's
+        // daily-usage report (the only snapshot the report is attached to).
+        if let estimate = provider.accountSnapshots[activeId]?.dailyUsageReport?.tokenEstimate {
+            lastEstimatedDailyTokens = estimate.projectedDailyTokens
+            lastEstimatedWeeklyTokens = estimate.projectedWeeklyTokens
+        }
+        let payload = WidgetUsagePayload(
+            accounts: accounts,
+            updatedAt: now,
+            displayModeLabel: modeLabel,
+            estimatedDailyTokens: lastEstimatedDailyTokens,
+            estimatedWeeklyTokens: lastEstimatedWeeklyTokens
+        )
         if let data = payload.encoded() {
             WidgetUsageServer.shared.update(data)
         }

@@ -9,9 +9,13 @@ public struct DailyUsageReport: Sendable, Equatable {
     /// Previous day's usage stats (for comparison)
     public let previous: DailyUsageStat
 
-    public init(today: DailyUsageStat, previous: DailyUsageStat) {
+    /// Pace-based token projection (daily/weekly) from recent rolling windows.
+    public let tokenEstimate: TokenUsageEstimate?
+
+    public init(today: DailyUsageStat, previous: DailyUsageStat, tokenEstimate: TokenUsageEstimate? = nil) {
         self.today = today
         self.previous = previous
+        self.tokenEstimate = tokenEstimate
     }
 
     // MARK: - Cost Delta

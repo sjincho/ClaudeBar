@@ -76,6 +76,7 @@ struct ClaudeUsageWidgetView: View {
                     }
                 }
                 Spacer(minLength: 0)
+                estimateFooter
             } else {
                 Spacer()
                 Text(entry.payload == nil ? "ClaudeBar isn't running" : "No usage yet")
@@ -146,6 +147,32 @@ struct ClaudeUsageWidgetView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Machine-wide token pace projection (daily/weekly), shown once at the bottom.
+    @ViewBuilder
+    private var estimateFooter: some View {
+        if let daily = entry.payload?.estimatedDailyTokens,
+           let weekly = entry.payload?.estimatedWeeklyTokens,
+           daily > 0 || weekly > 0 {
+            HStack(spacing: 5) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("est. ~\(formatTokens(daily))/day · ~\(formatTokens(weekly))/wk")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    private func formatTokens(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return String(format: "%.0fK", Double(count) / 1_000) }
+        return "\(count)"
     }
 
     private func bar(percent: Double, status: WidgetQuotaStatus) -> some View {

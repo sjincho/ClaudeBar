@@ -64,15 +64,27 @@ public struct WidgetUsagePayload: Codable, Sendable {
     /// "Remaining" or "Used" — how `displayPercent` should be labelled, mirroring
     /// the app's usage display mode. Defaults to "Remaining" for older payloads.
     public let displayModeLabel: String
+    /// Machine-wide token projections (not per-account): tokens this day/week at
+    /// the recent pace. Nil when unavailable.
+    public let estimatedDailyTokens: Int?
+    public let estimatedWeeklyTokens: Int?
 
-    public init(accounts: [WidgetAccountUsage], updatedAt: Date, displayModeLabel: String = "Remaining") {
+    public init(
+        accounts: [WidgetAccountUsage],
+        updatedAt: Date,
+        displayModeLabel: String = "Remaining",
+        estimatedDailyTokens: Int? = nil,
+        estimatedWeeklyTokens: Int? = nil
+    ) {
         self.accounts = accounts
         self.updatedAt = updatedAt
         self.displayModeLabel = displayModeLabel
+        self.estimatedDailyTokens = estimatedDailyTokens
+        self.estimatedWeeklyTokens = estimatedWeeklyTokens
     }
 
     private enum CodingKeys: String, CodingKey {
-        case accounts, updatedAt, displayModeLabel
+        case accounts, updatedAt, displayModeLabel, estimatedDailyTokens, estimatedWeeklyTokens
     }
 
     public init(from decoder: Decoder) throws {
@@ -80,6 +92,8 @@ public struct WidgetUsagePayload: Codable, Sendable {
         accounts = try c.decode([WidgetAccountUsage].self, forKey: .accounts)
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
         displayModeLabel = try c.decodeIfPresent(String.self, forKey: .displayModeLabel) ?? "Remaining"
+        estimatedDailyTokens = try c.decodeIfPresent(Int.self, forKey: .estimatedDailyTokens)
+        estimatedWeeklyTokens = try c.decodeIfPresent(Int.self, forKey: .estimatedWeeklyTokens)
     }
 
     /// Encodes for transport (ISO-8601 dates). App and widget share this so the

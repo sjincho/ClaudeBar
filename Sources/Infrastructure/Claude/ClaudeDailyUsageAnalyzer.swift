@@ -61,7 +61,28 @@ public struct ClaudeDailyUsageAnalyzer: DailyUsageAnalyzing, Sendable {
 
         AppLog.probes.info("DailyUsage: today=\(todayStat.formattedCost)/\(todayStat.formattedTokens), yesterday=\(yesterdayStat.formattedCost)/\(yesterdayStat.formattedTokens)")
 
-        return DailyUsageReport(today: todayStat, previous: yesterdayStat)
+        let estimate = Self.tokenEstimate(from: allRecords, now: currentDate)
+
+        return DailyUsageReport(today: todayStat, previous: yesterdayStat, tokenEstimate: estimate)
+    }
+
+    /// Sums non-cache tokens (input + output) in the last hour and last day, for
+    /// the day/week pace projection. Pure + static so it's unit-testable.
+    static func tokenEstimate(from records: [TokenUsageRecord], now: Date) -> TokenUsageEstimate {
+        let hourAgo = now.addingTimeInterval(-3600)
+        let dayAgo = now.addingTimeInterval(-86400)
+        var lastHour = 0
+        var lastDay = 0
+        for record in records where record.timestamp <= now {
+            let tokens = record.inputTokens + record.outputTokens
+            if record.timestamp >= dayAgo {
+                lastDay += tokens
+                if record.timestamp >= hourAgo {
+                    lastHour += tokens
+                }
+            }
+        }
+        return TokenUsageEstimate(lastHourTokens: lastHour, lastDayTokens: lastDay)
     }
 
     // MARK: - Private
