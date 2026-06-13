@@ -51,18 +51,18 @@ struct ClaudeUsageWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.tint)
                 Text("Claude usage")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 if let payload = entry.payload {
                     Text(payload.displayModeLabel.lowercased())
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 } else {
                     Text("open ClaudeBar")
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -92,20 +92,20 @@ struct ClaudeUsageWidgetView: View {
     private func accountRow(_ account: WidgetAccountUsage) -> some View {
         HStack(spacing: 8) {
             Text(account.label)
-                .font(.system(size: 11, weight: account.isActive ? .semibold : .regular))
+                .font(.system(size: 13, weight: account.isActive ? .semibold : .regular))
                 .lineLimit(1)
-                .frame(width: family == .systemLarge ? 110 : 80, alignment: .leading)
+                .frame(width: 88, alignment: .leading)
 
             if let quota = account.lowestQuota {
                 bar(percent: quota.displayPercent, status: quota.status)
                 Text("\(Int(quota.displayPercent.rounded()))%")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, alignment: .trailing)
+                    .frame(width: 36, alignment: .trailing)
             } else {
                 Spacer()
                 Text("—")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         }
@@ -117,30 +117,30 @@ struct ClaudeUsageWidgetView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 Text(account.label)
-                    .font(.system(size: 11, weight: account.isActive ? .semibold : .medium))
+                    .font(.system(size: 14, weight: account.isActive ? .semibold : .medium))
                     .lineLimit(1)
                 if account.isActive {
                     Text("default")
-                        .font(.system(size: 8, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             if account.quotas.isEmpty {
-                Text("—").font(.system(size: 9)).foregroundStyle(.secondary)
+                Text("—").font(.system(size: 11)).foregroundStyle(.secondary)
             } else {
                 ForEach(account.quotas.prefix(2), id: \.label) { quota in
                     HStack(spacing: 8) {
                         Text(quota.label)
-                            .font(.system(size: 9))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .frame(width: 46, alignment: .leading)
+                            .frame(width: 54, alignment: .leading)
                         bar(percent: quota.displayPercent, status: quota.status)
                         Text("\(Int(quota.displayPercent.rounded()))%")
-                            .font(.system(size: 9, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 28, alignment: .trailing)
+                            .frame(width: 36, alignment: .trailing)
                     }
                 }
             }
