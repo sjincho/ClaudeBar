@@ -299,9 +299,10 @@ struct ClaudeProviderTests {
         ])
         let claude = ClaudeProvider(probe: StaticUsageProbe(email: "default@example.com"), settingsRepository: settings)
 
-        #expect(claude.accounts.map(\.accountId) == ["work", "personal"])
-        #expect(claude.activeAccount.accountId == "work")
-        #expect(claude.activeAccount.email == "me@work.example")
+        // The default (global) account is always present alongside configured ones.
+        #expect(claude.accounts.map(\.accountId) == ["default", "work", "personal"])
+        // With no active account persisted, the default stays active.
+        #expect(claude.activeAccount.accountId == "default")
     }
 
     @Test
@@ -330,7 +331,8 @@ struct ClaudeProviderTests {
 
         #expect(claude.accountSnapshots["work"]?.accountEmail == "work@example.com")
         #expect(claude.accountSnapshots["personal"]?.accountEmail == "personal@example.com")
-        #expect(claude.snapshot?.accountEmail == "work@example.com")
+        // Active stays the default account (nothing switched), so its snapshot is exposed.
+        #expect(claude.snapshot?.accountEmail == "default@example.com")
     }
 
     @Test
@@ -378,7 +380,9 @@ struct ClaudeProviderTests {
         #expect(settings.accounts(forProvider: "claude").count == 1)
         #expect(settings.accounts(forProvider: "claude").first?.accountId == "work-main")
         #expect(settings.accounts(forProvider: "claude").first?.probeConfig[ClaudeAccountProbeConfig.claudeConfigDir] == "/private/tmp/claude-usage-poc-config/work-main")
-        #expect(settings.activeAccountId(forProvider: "claude") == "work-main")
+        // Adding an account does NOT steal the active selection; default stays active.
+        #expect(settings.activeAccountId(forProvider: "claude") == nil)
+        #expect(claude.accounts.map(\.accountId) == ["default", "work-main"])
     }
 }
 

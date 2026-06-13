@@ -117,8 +117,12 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         guard let multiAccountSettingsRepository else {
             return [defaultAccountConfig]
         }
+        // The default account (the global ~/.claude login) is ALWAYS present.
+        // Configured CLI-profile accounts are added alongside it, never replace
+        // it — otherwise adding one org would make the user's main login vanish.
         let configured = multiAccountSettingsRepository.accounts(forProvider: id)
-        return configured.isEmpty ? [defaultAccountConfig] : configured
+            .filter { $0.accountId != ProviderAccount.defaultAccountId }
+        return [defaultAccountConfig] + configured
     }
 
     private var activeAccountConfig: ProviderAccountConfig {
@@ -326,10 +330,9 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
             ]
         )
 
+        // Adding an account must NOT change which account is active — the user's
+        // current (default/global) login stays active until they explicitly switch.
         multiAccountSettingsRepository.addAccount(config, forProvider: id)
-        if multiAccountSettingsRepository.activeAccountId(forProvider: id) == nil {
-            multiAccountSettingsRepository.setActiveAccountId(accountId, forProvider: id)
-        }
         return true
     }
 
