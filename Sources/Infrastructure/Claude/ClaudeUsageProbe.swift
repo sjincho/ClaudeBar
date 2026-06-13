@@ -66,6 +66,20 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
     }
 
     public func probe() async throws -> UsageSnapshot {
+        // A freshly-logged-in per-account profile is not onboarded and trusts no
+        // folders, so `/usage` would drop into the welcome/trust flow and never
+        // render. Prepare it once up front. The global ~/.claude profile (no
+        // config-dir override) is already onboarded and is left untouched.
+        prepareAccountProfileIfNeeded(workingDir: probeWorkingDirectory())
+        return try await probe(parseRetriesRemaining: 2)
+    }
+
+    /// - Parameter parseRetriesRemaining: how many times to re-run `/usage` if the
+    ///   output can't be parsed. A cold profile (e.g. a freshly-logged-in account
+    ///   with MCP servers still connecting) sometimes renders its startup banner
+    ///   before the usage screen, so the captured buffer is truncated. Re-running
+    ///   reliably catches the rendered screen on a subsequent attempt.
+    private func probe(parseRetriesRemaining: Int) async throws -> UsageSnapshot {
         let probeStart = CFAbsoluteTimeGetCurrent()
         let workingDir = probeWorkingDirectory()
         AppLog.probes.info("Starting Claude probe with /usage command...")
@@ -105,13 +119,18 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
             // Auto-response failed to dismiss trust prompt — write trust to ~/.claude.json and retry
             AppLog.probes.info("Writing trust for probe directory and retrying...")
             if writeClaudeTrust(for: workingDir) {
-                return try await probe()
+                return try await probe(parseRetriesRemaining: parseRetriesRemaining)
             }
             throw ProbeError.folderTrustRequired
         } catch ProbeError.subscriptionRequired {
             // API Usage Billing accounts don't support /usage, try /cost instead
             AppLog.probes.info("Account requires /cost command, falling back...")
             return try await probeCost(workingDir: workingDir)
+        } catch let ProbeError.parseFailed(reason) where parseRetriesRemaining > 0 {
+            // The usage screen likely hadn't finished rendering when captured
+            // (common on cold profiles). Re-run /usage and try again.
+            AppLog.probes.warning("Claude parse failed (\(reason)); retrying /usage (\(parseRetriesRemaining) left)...")
+            return try await probe(parseRetriesRemaining: parseRetriesRemaining - 1)
         } catch {
             AppLog.probes.debug("Working directory: \(workingDir.path)")
             throw error
@@ -943,6 +962,40 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
         } catch {
             AppLog.probes.error("Failed to write trust to \(claudeJsonURL.path): \(error.localizedDescription)")
             return false
+        }
+    }
+
+    /// Prepares a per-account Claude profile so `/usage` renders directly:
+    /// marks onboarding complete and trusts the probe working directory. Only
+    /// applies when probing an account-specific config dir; the global profile
+    /// is never modified here.
+    private func prepareAccountProfileIfNeeded(workingDir: URL) {
+        guard claudeConfigDirectory != nil else { return }
+        markOnboardingCompleted()
+        _ = writeClaudeTrust(for: workingDir)
+    }
+
+    /// Sets `hasCompletedOnboarding: true` in the account profile's `.claude.json`
+    /// so the CLI skips the welcome/onboarding flow. No-op if already set or if the
+    /// file is missing/invalid. Only runs for account-specific config dirs.
+    private func markOnboardingCompleted() {
+        guard let configDir = claudeConfigDirectory else { return }
+        let claudeJsonURL = configDir.appendingPathComponent(".claude.json")
+
+        guard FileManager.default.fileExists(atPath: claudeJsonURL.path),
+              let data = try? Data(contentsOf: claudeJsonURL),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        if root["hasCompletedOnboarding"] as? Bool == true { return }
+
+        root["hasCompletedOnboarding"] = true
+        do {
+            let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            try out.write(to: claudeJsonURL, options: .atomic)
+            AppLog.probes.info("Marked profile onboarded: \(claudeJsonURL.path)")
+        } catch {
+            AppLog.probes.error("Failed to mark profile onboarded: \(error.localizedDescription)")
         }
     }
 
