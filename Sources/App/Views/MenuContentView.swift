@@ -523,7 +523,11 @@ struct MenuContentView: View {
             .padding(.horizontal, 4)
 
             if let snapshot = provider.accountSnapshots[account.accountId] {
-                statsGrid(snapshot: snapshot)
+                // Daily Cost/Tokens/Working-time are machine-wide (scanned from
+                // local JSONL), not per-account — they'd be identical under every
+                // account, so suppress them here. Only true per-account quota
+                // gauges (Session/Weekly/Sonnet) are shown in the cross-org view.
+                statsGrid(snapshot: snapshot, includeDailyUsage: false)
             } else if provider.isSyncing {
                 LoadingSpinnerView()
             } else {
@@ -589,7 +593,7 @@ struct MenuContentView: View {
     }
 
     @ViewBuilder
-    private func statsGrid(snapshot: UsageSnapshot) -> some View {
+    private func statsGrid(snapshot: UsageSnapshot, includeDailyUsage: Bool = true) -> some View {
         VStack(spacing: 10) {
             // Show quota cards if quotas exist (Max/Pro accounts)
             if !snapshot.quotas.isEmpty {
@@ -619,7 +623,7 @@ struct MenuContentView: View {
 
             // Show daily usage cards from JSONL session analysis (e.g., Claude Code)
             // Controlled via Settings toggle or ~/.claudebar/settings.json
-            if settings.showDailyUsageCards, let report = snapshot.dailyUsageReport {
+            if includeDailyUsage, settings.showDailyUsageCards, let report = snapshot.dailyUsageReport {
                 let baseDelay = Double(snapshot.quotas.count + 1) * 0.08
                 LazyVGrid(
                     columns: [
