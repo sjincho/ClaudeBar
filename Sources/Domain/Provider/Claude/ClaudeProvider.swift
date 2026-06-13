@@ -125,17 +125,55 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         return [defaultAccountConfig] + configured
     }
 
+    /// Organization key used to dedupe the global account against profiles.
+    /// Matches on organization name only — NOT email, since multiple orgs can
+    /// share one email (e.g. several RIDI orgs under the same address).
+    private func orgKey(for config: ProviderAccountConfig) -> String? {
+        let org = config.organization ?? accountSnapshots[config.accountId]?.accountOrganization
+        let trimmed = org?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    /// The configured profile whose organization matches the global (default)
+    /// account's, if any. When present, the global account is redundant.
+    private var profileMatchingDefaultOrg: ProviderAccountConfig? {
+        guard let defaultKey = orgKey(for: defaultAccountConfig) else { return nil }
+        return accountConfigs.first {
+            $0.accountId != ProviderAccount.defaultAccountId && orgKey(for: $0) == defaultKey
+        }
+    }
+
+    /// Accounts shown to the user. The synthesized global/default account is
+    /// shown only when no configured profile already represents its org —
+    /// "show primary only iff none matches".
+    private var displayedAccountConfigs: [ProviderAccountConfig] {
+        guard profileMatchingDefaultOrg != nil else { return accountConfigs }
+        return accountConfigs.filter { $0.accountId != ProviderAccount.defaultAccountId }
+    }
+
     private var activeAccountConfig: ProviderAccountConfig {
         let configs = accountConfigs
+        let active: ProviderAccountConfig
         if let activeId = multiAccountSettingsRepository?.activeAccountId(forProvider: id),
-           let active = configs.first(where: { $0.accountId == activeId }) {
-            return active
+           let found = configs.first(where: { $0.accountId == activeId }) {
+            active = found
+        } else {
+            active = configs.first ?? defaultAccountConfig
         }
-        return configs.first ?? defaultAccountConfig
+        // If the active resolves to the global account but it's hidden because a
+        // profile represents the same org, surface that profile as active.
+        if active.accountId == ProviderAccount.defaultAccountId,
+           let match = profileMatchingDefaultOrg {
+            return match
+        }
+        return active
     }
 
     public var accounts: [ProviderAccount] {
-        accountConfigs.map(providerAccount(from:))
+        let all = displayedAccountConfigs.map(providerAccount(from:))
+        // Show the active (primary) account first.
+        let activeId = activeAccount.accountId
+        return all.filter { $0.accountId == activeId } + all.filter { $0.accountId != activeId }
     }
 
     public var activeAccount: ProviderAccount {
@@ -282,20 +320,45 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         isSyncing = true
         defer { isSyncing = false }
 
+        let configs = accountConfigs
+
+        // Probe every account concurrently — the slow `claude /usage` calls
+        // dominate wall-clock, and they're independent per account.
+        let probed: [(String, Result<UsageSnapshot, Error>)] = await withTaskGroup(
+            of: (String, Result<UsageSnapshot, Error>).self
+        ) { group in
+            for config in configs {
+                group.addTask {
+                    do { return (config.accountId, .success(try await self.probeAccountConfig(config))) }
+                    catch { return (config.accountId, .failure(error)) }
+                }
+            }
+            var out: [(String, Result<UsageSnapshot, Error>)] = []
+            for await result in group { out.append(result) }
+            return out
+        }
+
         var refreshedAnyAccount = false
         var latestError: Error?
-
-        for config in accountConfigs {
-            do {
-                let newSnapshot = try await refreshAccountConfig(config, kind: kind)
-                accountSnapshots[config.accountId] = newSnapshot
+        for (accountId, result) in probed {
+            switch result {
+            case .success(let raw):
+                accountSnapshots[accountId] = raw
                 refreshedAnyAccount = true
-            } catch {
+            case .failure(let error):
                 latestError = error
             }
         }
 
-        snapshot = accountSnapshots[activeAccount.accountId]
+        // The active account is only known once orgs resolve (the dedup runs
+        // post-probe). Attach the machine-wide daily report to the active
+        // account only — it's the sole place that card renders, so the other
+        // accounts skip the redundant JSONL scan entirely.
+        let activeId = activeAccount.accountId
+        if let raw = accountSnapshots[activeId] {
+            accountSnapshots[activeId] = await report(for: raw, kind: kind)
+        }
+        snapshot = accountSnapshots[activeId]
         lastError = refreshedAnyAccount ? nil : latestError
     }
 
@@ -347,11 +410,18 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         _ config: ProviderAccountConfig,
         kind: RefreshKind
     ) async throws -> UsageSnapshot {
+        let raw = try await probeAccountConfig(config)
+        return await report(for: raw, kind: kind)
+    }
+
+    /// Runs the account's probe (with fallback) and returns the raw snapshot,
+    /// without attaching the daily-usage report. Safe to call concurrently — it
+    /// reads provider state but mutates none of it.
+    private func probeAccountConfig(_ config: ProviderAccountConfig) async throws -> UsageSnapshot {
         let probe = primaryProbe(for: config)
 
         do {
-            let newSnapshot = try await probe.probe()
-            return await report(for: newSnapshot, kind: kind)
+            return try await probe.probe()
         } catch let primaryError {
             guard !usesAccountSpecificCLI(config),
                   Self.shouldAttemptFallback(after: primaryError),
@@ -360,8 +430,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
             }
 
             do {
-                let newSnapshot = try await fallback.probe()
-                return await report(for: newSnapshot, kind: kind)
+                return try await fallback.probe()
             } catch {
                 // Both probes failed. Surface the primary error — it is
                 // the actual root cause (e.g. HTTP 429). The fallback's
@@ -399,12 +468,22 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
 
     private func providerAccount(from config: ProviderAccountConfig) -> ProviderAccount {
         let snapshot = accountSnapshots[config.accountId]
+        let email = config.email ?? snapshot?.accountEmail
+        let organization = config.organization ?? snapshot?.accountOrganization
+        // The default (global) account carries a generic "Claude" label. Once its
+        // snapshot resolves a real org/email, show that instead so it reads like
+        // the configured profile accounts rather than a generic placeholder.
+        var label = config.label
+        if config.accountId == ProviderAccount.defaultAccountId,
+           let resolved = organization ?? email {
+            label = resolved
+        }
         return ProviderAccount(
             accountId: config.accountId,
             providerId: id,
-            label: config.label,
-            email: config.email ?? snapshot?.accountEmail,
-            organization: config.organization ?? snapshot?.accountOrganization
+            label: label,
+            email: email,
+            organization: organization
         )
     }
 

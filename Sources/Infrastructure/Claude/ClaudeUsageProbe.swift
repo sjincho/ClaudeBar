@@ -1002,9 +1002,14 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
     internal func probeWorkingDirectory() -> URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
-        let dir = base
+        var dir = base
             .appendingPathComponent("ClaudeBar", isDirectory: true)
             .appendingPathComponent("Probe", isDirectory: true)
+        // Account-specific profiles get their own working dir so concurrent
+        // probes don't contend on one directory's CLI session/lock state.
+        if let configDir = claudeConfigDirectory {
+            dir = dir.appendingPathComponent(configDir.lastPathComponent, isDirectory: true)
+        }
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

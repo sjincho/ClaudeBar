@@ -384,12 +384,60 @@ struct ClaudeProviderTests {
         #expect(settings.activeAccountId(forProvider: "claude") == nil)
         #expect(claude.accounts.map(\.accountId) == ["default", "work-main"])
     }
+
+    @Test
+    func `global account is hidden when a profile already covers its organization`() async {
+        let settings = FakeMultiAccountClaudeSettings(accounts: [
+            ProviderAccountConfig(
+                accountId: "work",
+                label: "Work",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+            ),
+        ])
+        let claude = ClaudeProvider(
+            probe: StaticUsageProbe(email: "me@acme.example", organization: "Acme"),
+            settingsRepository: settings,
+            cliProbeFactory: { _ in StaticUsageProbe(email: "me@acme.example", organization: "Acme") }
+        )
+
+        // Before probing, the global account is shown — its org isn't known yet.
+        #expect(claude.accounts.map(\.accountId) == ["default", "work"])
+
+        await claude.refreshAllAccounts()
+
+        // Once both resolve to org "Acme", the redundant global account is hidden
+        // and the matching profile becomes active ("show primary only iff none matches").
+        #expect(claude.accounts.map(\.accountId) == ["work"])
+        #expect(claude.activeAccount.accountId == "work")
+    }
+
+    @Test
+    func `global account stays visible when no profile matches its organization`() async {
+        let settings = FakeMultiAccountClaudeSettings(accounts: [
+            ProviderAccountConfig(
+                accountId: "work",
+                label: "Work",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+            ),
+        ])
+        let claude = ClaudeProvider(
+            probe: StaticUsageProbe(email: "me@personal.example", organization: "Personal Org"),
+            settingsRepository: settings,
+            cliProbeFactory: { _ in StaticUsageProbe(email: "me@acme.example", organization: "Acme") }
+        )
+
+        await claude.refreshAllAccounts()
+
+        // Different orgs → the global account remains its own entry.
+        #expect(claude.accounts.map(\.accountId) == ["default", "work"])
+    }
 }
 
 // MARK: - Test Helpers
 
 private struct StaticUsageProbe: UsageProbe {
     let email: String
+    var organization: String? = nil
 
     func probe() async throws -> UsageSnapshot {
         UsageSnapshot(
@@ -402,7 +450,8 @@ private struct StaticUsageProbe: UsageProbe {
                 )
             ],
             capturedAt: Date(),
-            accountEmail: email
+            accountEmail: email,
+            accountOrganization: organization
         )
     }
 
