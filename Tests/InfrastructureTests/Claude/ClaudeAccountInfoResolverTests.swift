@@ -123,6 +123,33 @@ struct ClaudeAccountInfoResolverTests {
         #expect(result == nil)
     }
 
+    // MARK: - Rate-limit tier
+
+    @Test
+    func `parses the Nx multiplier from rate-limit tiers`() {
+        #expect(ClaudeAccountInfoResolver.rateLimitMultiplier(from: "default_claude_max_20x") == 20)
+        #expect(ClaudeAccountInfoResolver.rateLimitMultiplier(from: "default_claude_max_5x") == 5)
+        #expect(ClaudeAccountInfoResolver.rateLimitMultiplier(from: "default_raven") == nil)
+        #expect(ClaudeAccountInfoResolver.rateLimitMultiplier(from: nil) == nil)
+    }
+
+    @Test
+    func `prefers per-user tier, falls back to org tier for the budget weight`() {
+        // Team seat: userRateLimitTier (5x) wins over the org's non-Nx tier.
+        let team = makeResolverWithConfig(#"""
+        {"oauthAccount":{"emailAddress":"u@x.com","organizationName":"Org",
+          "organizationRateLimitTier":"default_raven","userRateLimitTier":"default_claude_max_5x"}}
+        """#)
+        #expect(team.resolve()?.budgetWeight == 5)
+
+        // Max account: no userRateLimitTier, so the org tier (20x) is used.
+        let max = makeResolverWithConfig(#"""
+        {"oauthAccount":{"emailAddress":"u@x.com","organizationName":"Org",
+          "organizationRateLimitTier":"default_claude_max_20x"}}
+        """#)
+        #expect(max.resolve()?.budgetWeight == 20)
+    }
+
     // MARK: - Helpers
 
     private func makeResolverWithConfig(_ json: String) -> ClaudeAccountInfoResolver {

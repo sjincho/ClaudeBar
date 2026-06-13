@@ -19,15 +19,21 @@ public struct AccountInfo: Sendable, Equatable {
     public let email: String?
     public let organization: String?
     public let loginMethod: String?
+    /// Relative budget weight from the account's rate-limit tier (e.g. Max 20x → 20,
+    /// Team seat 5x → 5). Used to weight cross-account aggregates so a big-budget
+    /// account isn't averaged as if it were the same size as a small one. nil if unknown.
+    public let budgetWeight: Double?
 
     public init(
         email: String? = nil,
         organization: String? = nil,
-        loginMethod: String? = nil
+        loginMethod: String? = nil,
+        budgetWeight: Double? = nil
     ) {
         self.email = email
         self.organization = organization
         self.loginMethod = loginMethod
+        self.budgetWeight = budgetWeight
     }
 
     /// The best available name for display: email first, then organization.

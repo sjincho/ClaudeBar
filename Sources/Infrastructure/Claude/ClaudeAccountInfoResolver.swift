@@ -32,9 +32,27 @@ public final class ClaudeAccountInfoResolver: AccountInfoResolving, Sendable {
 
         guard email != nil || organization != nil else { return nil }
 
+        // Prefer the per-user tier (Team seats carry `userRateLimitTier`, e.g.
+        // `default_claude_max_5x`); fall back to the org tier (Max accounts carry
+        // `organizationRateLimitTier`, e.g. `default_claude_max_20x`).
+        let budgetWeight =
+            Self.rateLimitMultiplier(from: oauthAccount["userRateLimitTier"] as? String)
+            ?? Self.rateLimitMultiplier(from: oauthAccount["organizationRateLimitTier"] as? String)
+
         return AccountInfo(
             email: email,
-            organization: organization
+            organization: organization,
+            budgetWeight: budgetWeight
         )
+    }
+
+    /// Parses the `Nx` multiplier out of a rate-limit tier string, e.g.
+    /// `default_claude_max_20x` → 20, `default_claude_max_5x` → 5. Returns nil for
+    /// tiers without an `Nx` suffix (e.g. `default_raven`).
+    static func rateLimitMultiplier(from tier: String?) -> Double? {
+        guard let tier else { return nil }
+        guard let range = tier.range(of: #"(\d+)x$"#, options: .regularExpression) else { return nil }
+        let digits = tier[range].dropLast()  // strip trailing "x"
+        return Double(digits)
     }
 }
