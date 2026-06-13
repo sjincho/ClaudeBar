@@ -75,6 +75,14 @@ struct ClaudeBarApp: App {
                     // Fast path: read this account's token from its per-config-dir
                     // Keychain item and hit the usage API directly — no CLI spawn.
                     return ClaudeAccountAPIProbe(configDirectory: configDirectory)
+                },
+                defaultAccountInfoProvider: {
+                    // Resolve the global ~/.claude account's org from ~/.claude.json
+                    // (no probe) so a global that duplicates a configured profile
+                    // can be deduped/skipped up front.
+                    ClaudeAccountInfoResolver().resolve().map {
+                        (email: $0.email, organization: $0.organization)
+                    }
                 }
             ),
             CodexProvider(

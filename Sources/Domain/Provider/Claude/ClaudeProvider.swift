@@ -96,6 +96,21 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     /// fresh probe with an empty cache and hammer the upstream API.
     private var accountProbes: [String: any UsageProbe] = [:]
 
+    /// Resolves the global (`~/.claude`) account's identity (email/org) cheaply,
+    /// without a probe. Lets the provider decide up front whether the global is a
+    /// duplicate of a configured profile — and skip its slow CLI probe if so.
+    private let defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)?
+    private var cachedDefaultInfo: (email: String?, organization: String?)?
+    private var didResolveDefaultInfo = false
+
+    private func resolvedDefaultAccountInfo() -> (email: String?, organization: String?)? {
+        if !didResolveDefaultInfo {
+            cachedDefaultInfo = defaultAccountInfoProvider?()
+            didResolveDefaultInfo = true
+        }
+        return cachedDefaultInfo
+    }
+
     /// The API probe for fetching usage data via HTTP API (optional)
     private let apiProbe: (any UsageProbe)?
 
@@ -135,7 +150,12 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     /// Matches on organization name only — NOT email, since multiple orgs can
     /// share one email (e.g. several RIDI orgs under the same address).
     private func orgKey(for config: ProviderAccountConfig) -> String? {
-        let org = config.organization ?? accountSnapshots[config.accountId]?.accountOrganization
+        var org = config.organization ?? accountSnapshots[config.accountId]?.accountOrganization
+        // The global account's org can be resolved cheaply (from ~/.claude.json)
+        // even before it's probed, so a covered global can be deduped/skipped.
+        if org == nil, config.accountId == ProviderAccount.defaultAccountId {
+            org = resolvedDefaultAccountInfo()?.organization
+        }
         let trimmed = org?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }
@@ -209,7 +229,8 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         passProbe: (any ClaudePassProbing)? = nil,
         settingsRepository: any ProviderSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
-        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil
+        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)? = nil
     ) {
         self.cliProbe = probe
         self.cliProbeFactory = cliProbeFactory ?? { _ in probe }
@@ -217,6 +238,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         self.passProbe = passProbe
         self.settingsRepository = settingsRepository
         self.dailyUsageAnalyzer = dailyUsageAnalyzer
+        self.defaultAccountInfoProvider = defaultAccountInfoProvider
         // Load persisted enabled state (defaults to true)
         self.isEnabled = settingsRepository.isEnabled(forProvider: "claude")
     }
@@ -233,7 +255,8 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         passProbe: (any ClaudePassProbing)? = nil,
         settingsRepository: any ClaudeSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
-        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil
+        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)? = nil
     ) {
         self.cliProbe = cliProbe
         self.cliProbeFactory = cliProbeFactory ?? { _ in cliProbe }
@@ -241,6 +264,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         self.passProbe = passProbe
         self.settingsRepository = settingsRepository
         self.dailyUsageAnalyzer = dailyUsageAnalyzer
+        self.defaultAccountInfoProvider = defaultAccountInfoProvider
         // Load persisted enabled state (defaults to true)
         self.isEnabled = settingsRepository.isEnabled(forProvider: "claude")
     }
@@ -326,19 +350,22 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         isSyncing = true
         defer { isSyncing = false }
 
-        let configs = accountConfigs
+        didResolveDefaultInfo = false  // re-read the global account's identity this cycle
 
-        // Materialize (and memoize) each account's probe serially first, so the
+        let allConfigs = accountConfigs
+        let profileConfigs = allConfigs.filter { $0.accountId != ProviderAccount.defaultAccountId }
+        let defaultConfig = allConfigs.first { $0.accountId == ProviderAccount.defaultAccountId }
+
+        // Materialize (and memoize) profile probes serially first, so the
         // concurrent tasks below only READ `accountProbes` (no data race) and so
         // per-account caches/rate-limit state survive across refreshes.
-        for config in configs { _ = primaryProbe(for: config) }
+        for config in profileConfigs { _ = primaryProbe(for: config) }
 
-        // Probe every account concurrently — the slow `claude /usage` calls
-        // dominate wall-clock, and they're independent per account.
+        // Probe the configured profiles concurrently — these are fast API calls.
         let probed: [(String, Result<UsageSnapshot, Error>)] = await withTaskGroup(
             of: (String, Result<UsageSnapshot, Error>).self
         ) { group in
-            for config in configs {
+            for config in profileConfigs {
                 group.addTask {
                     do { return (config.accountId, .success(try await self.probeAccountConfig(config))) }
                     catch { return (config.accountId, .failure(error)) }
@@ -358,6 +385,24 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
                 refreshedAnyAccount = true
             case .failure(let error):
                 latestError = error
+            }
+        }
+
+        // Probe the global ~/.claude account only when no configured profile
+        // already represents its org. Otherwise it's a hidden duplicate, and its
+        // ~10s CLI scrape would needlessly dominate the refresh. (`orgKey` resolves
+        // the global's org cheaply from ~/.claude.json, so this decision needs no
+        // probe of the global.)
+        if let defaultConfig {
+            if profileMatchingDefaultOrg == nil {
+                do {
+                    accountSnapshots[defaultConfig.accountId] = try await probeAccountConfig(defaultConfig)
+                    refreshedAnyAccount = true
+                } catch {
+                    latestError = error
+                }
+            } else {
+                accountSnapshots.removeValue(forKey: defaultConfig.accountId)
             }
         }
 
