@@ -28,14 +28,21 @@ public struct SecItemKeychainDataStore: ClaudeKeychainDataStore {
 
     @discardableResult
     public func write(_ data: Data, service: String) -> Bool {
-        let base: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
         ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = data
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        // Update in place to preserve the item's ACL — the item is created by the
+        // `claude` CLI, and delete + re-add would recreate it owned solely by us,
+        // forcing the CLI to re-authorize. Fall back to add only if absent.
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return true }
+        if status == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = data
+            return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        }
+        return false
     }
 }
 

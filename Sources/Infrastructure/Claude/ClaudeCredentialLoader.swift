@@ -332,24 +332,21 @@ public struct ClaudeCredentialLoader: Sendable {
             return
         }
 
-        // Delete existing item first (ignore errors if not found), in-process so
-        // every keychain operation runs as ClaudeBar rather than the `security` CLI.
-        let deleteQuery: [String: Any] = [
+        // Update the item IN PLACE so its access-control list survives. The item
+        // is created by the `claude` CLI; deleting + re-adding would recreate it
+        // owned solely by us, forcing the CLI to re-authorize on its next read.
+        // SecItemUpdate keeps the existing ACL and (unlike `security -w`) never
+        // puts the secret on a command line. Fall back to add only if absent.
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        // Add the new item via the Security framework rather than the `security`
-        // CLI. `add-generic-password -w <token>` would place the secret in the
-        // process arguments, briefly visible to `ps` for other local processes;
-        // SecItemAdd keeps it out of any command line.
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecValueData as String: jsonData,
-        ]
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: jsonData] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = jsonData
+            status = SecItemAdd(add as CFDictionary, nil)
+        }
 
         if status == errSecSuccess {
             AppLog.credentials.info("Saved Claude credentials to Keychain")
