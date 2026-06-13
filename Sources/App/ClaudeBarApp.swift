@@ -334,6 +334,8 @@ struct ClaudeBarApp: App {
                 }
             }
             .task(id: refreshLoopKey) {
+                // Serve usage to the desktop widget over loopback (idempotent).
+                WidgetUsageServer.shared.start()
                 guard refreshLoopKey.isEnabled else {
                     monitor.stopMonitoring()
                     return

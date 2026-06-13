@@ -81,6 +81,35 @@ let project = Project(
             )
         ),
 
+        // MARK: - Widget Extension (desktop widget; reads usage over loopback)
+        .target(
+            name: "ClaudeBarWidget",
+            destinations: .macOS,
+            product: .appExtension,
+            bundleId: "com.tddworks.claudebar.widget",
+            deploymentTargets: .macOS("15.0"),
+            infoPlist: .extendingDefault(with: [
+                "CFBundleDisplayName": "Claude Usage",
+                "NSExtension": [
+                    "NSExtensionPointIdentifier": "com.apple.widgetkit-extension",
+                ],
+            ]),
+            // Compile the shared model sources directly (an app extension can't
+            // depend on a static framework); JSON over loopback is the real
+            // contract between app and widget, so a separate copy of the types
+            // is fine.
+            sources: ["Sources/Widget/**", "Sources/WidgetShared/**"],
+            entitlements: .file(path: "Sources/Widget/entitlements.plist"),
+            settings: .settings(
+                base: [
+                    // Swift 5 mode: WidgetKit's closure-based TimelineProvider
+                    // completion handlers don't satisfy Swift 6 `sending` rules.
+                    "SWIFT_VERSION": "5",
+                    "CODE_SIGN_IDENTITY": "-",
+                ]
+            )
+        ),
+
         // MARK: - Main Application
         .target(
             name: "ClaudeBar",
@@ -98,6 +127,7 @@ let project = Project(
                 .target(name: "Domain"),
                 .target(name: "Infrastructure"),
                 .target(name: "WidgetShared"),
+                .target(name: "ClaudeBarWidget"),
                 .external(name: "Sparkle"),
             ],
             settings: .settings(

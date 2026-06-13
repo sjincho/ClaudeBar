@@ -30,7 +30,10 @@ enum WidgetUsagePublisher {
                 quotas: quotas
             )
         }
-        WidgetSharedStore.write(WidgetUsagePayload(accounts: accounts, updatedAt: now))
+        let payload = WidgetUsagePayload(accounts: accounts, updatedAt: now)
+        if let data = payload.encoded() {
+            WidgetUsageServer.shared.update(data)
+        }
         WidgetCenter.shared.reloadAllTimelines()
     }
 

@@ -1,0 +1,146 @@
+import WidgetKit
+import SwiftUI
+// WidgetShared model sources are compiled into this target directly (see Project.swift).
+
+// MARK: - Timeline
+
+struct ClaudeUsageEntry: TimelineEntry {
+    let date: Date
+    let payload: WidgetUsagePayload?
+}
+
+struct ClaudeUsageProvider: TimelineProvider {
+    func placeholder(in context: Context) -> ClaudeUsageEntry {
+        ClaudeUsageEntry(date: Date(), payload: nil)
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (ClaudeUsageEntry) -> Void) {
+        Task {
+            completion(ClaudeUsageEntry(date: Date(), payload: await fetch()))
+        }
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<ClaudeUsageEntry>) -> Void) {
+        Task {
+            let entry = ClaudeUsageEntry(date: Date(), payload: await fetch())
+            // Refresh roughly every 15 minutes (WidgetKit budgets refreshes).
+            let next = Date().addingTimeInterval(15 * 60)
+            completion(Timeline(entries: [entry], policy: .after(next)))
+        }
+    }
+
+    /// Fetches usage from the running app over loopback. Returns nil if the app
+    /// isn't running (server unavailable) — the view shows a hint in that case.
+    private func fetch() async -> WidgetUsagePayload? {
+        var request = URLRequest(url: WidgetUsageEndpoint.url)
+        request.timeoutInterval = 5
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        return WidgetUsagePayload.decode(data)
+    }
+}
+
+// MARK: - Views
+
+struct ClaudeUsageWidgetView: View {
+    let entry: ClaudeUsageEntry
+    @Environment(\.widgetFamily) private var family
+
+    private var maxAccounts: Int { family == .systemLarge ? 6 : 4 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tint)
+                Text("Claude usage")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if entry.payload == nil {
+                    Text("open ClaudeBar")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let accounts = entry.payload?.accounts, !accounts.isEmpty {
+                ForEach(accounts.prefix(maxAccounts)) { account in
+                    accountRow(account)
+                }
+                Spacer(minLength: 0)
+            } else {
+                Spacer()
+                Text(entry.payload == nil ? "ClaudeBar isn't running" : "No usage yet")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                Spacer()
+            }
+        }
+        .containerBackground(.fill.tertiary, for: .widget)
+    }
+
+    @ViewBuilder
+    private func accountRow(_ account: WidgetAccountUsage) -> some View {
+        HStack(spacing: 8) {
+            Text(account.label)
+                .font(.system(size: 11, weight: account.isActive ? .semibold : .regular))
+                .lineLimit(1)
+                .frame(width: family == .systemLarge ? 110 : 80, alignment: .leading)
+
+            if let quota = account.lowestQuota {
+                bar(percent: quota.percentRemaining, status: quota.status)
+                Text("\(Int(quota.percentRemaining.rounded()))%")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, alignment: .trailing)
+            } else {
+                Spacer()
+                Text("—")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func bar(percent: Double, status: WidgetQuotaStatus) -> some View {
+        let fraction = max(0, min(1, percent / 100))
+        return GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule().fill(color(for: status))
+                    .frame(width: geo.size.width * fraction)
+            }
+        }
+        .frame(height: 6)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func color(for status: WidgetQuotaStatus) -> Color {
+        switch status {
+        case .healthy: return .green
+        case .warning: return .orange
+        case .critical, .depleted: return .red
+        }
+    }
+}
+
+// MARK: - Widget
+
+struct ClaudeUsageWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: WidgetUsageEndpoint.widgetKind, provider: ClaudeUsageProvider()) { entry in
+            ClaudeUsageWidgetView(entry: entry)
+        }
+        .configurationDisplayName("Claude Usage")
+        .description("Your Claude accounts' usage at a glance.")
+        .supportedFamilies([.systemMedium, .systemLarge])
+    }
+}
+
+@main
+struct ClaudeBarWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        ClaudeUsageWidget()
+    }
+}

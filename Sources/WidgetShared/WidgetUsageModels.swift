@@ -50,8 +50,8 @@ public struct WidgetAccountUsage: Codable, Sendable, Identifiable, Hashable {
     }
 }
 
-/// The full payload the app writes to the shared App Group container and the
-/// widget reads on its timeline.
+/// The full payload the app serves over loopback HTTP and the widget fetches on
+/// its timeline.
 public struct WidgetUsagePayload: Codable, Sendable {
     public let accounts: [WidgetAccountUsage]
     public let updatedAt: Date
@@ -59,5 +59,19 @@ public struct WidgetUsagePayload: Codable, Sendable {
     public init(accounts: [WidgetAccountUsage], updatedAt: Date) {
         self.accounts = accounts
         self.updatedAt = updatedAt
+    }
+
+    /// Encodes for transport (ISO-8601 dates). App and widget share this so the
+    /// formats can't drift.
+    public func encoded() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(self)
+    }
+
+    public static func decode(_ data: Data) -> WidgetUsagePayload? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(WidgetUsagePayload.self, from: data)
     }
 }
