@@ -42,6 +42,20 @@ struct InteractiveRunnerTests {
     }
 
     @Test
+    func `Options defaults environmentOverrides to empty`() {
+        let options = InteractiveRunner.Options()
+        #expect(options.environmentOverrides.isEmpty)
+    }
+
+    @Test
+    func `Options stores environmentOverrides`() {
+        let options = InteractiveRunner.Options(
+            environmentOverrides: ["CLAUDE_CONFIG_DIR": "/tmp/claude-work"]
+        )
+        #expect(options.environmentOverrides == ["CLAUDE_CONFIG_DIR": "/tmp/claude-work"])
+    }
+
+    @Test
     func `run with environmentExclusions strips env vars from subprocess`() throws {
         let runner = InteractiveRunner()
         // Set a test env var that we'll verify is excluded
@@ -74,6 +88,23 @@ struct InteractiveRunnerTests {
         )
 
         #expect(result.output.contains("CLAUDEBAR_TEST_PRESERVE_VAR=should_be_present"))
+    }
+
+    @Test
+    func `run with environmentOverrides sets env vars in subprocess`() throws {
+        let runner = InteractiveRunner()
+        let testKey = "CLAUDEBAR_TEST_OVERRIDE_VAR"
+        setenv(testKey, "ambient_value", 1)
+        defer { unsetenv(testKey) }
+
+        let result = try runner.run(
+            binary: "/usr/bin/env",
+            input: "",
+            options: .init(environmentOverrides: [testKey: "override_value"])
+        )
+
+        #expect(result.output.contains("\(testKey)=override_value"))
+        #expect(!result.output.contains("\(testKey)=ambient_value"))
     }
 }
 

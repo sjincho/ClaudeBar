@@ -103,6 +103,10 @@ struct SettingsContentView: View {
                     if isClaudeEnabled {
                         ClaudeConfigCard(monitor: monitor)
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                        if let claudeProvider = monitor.provider(for: ProviderID.claude) as? (any MultiAccountProvider) {
+                            AccountManagementCard(provider: claudeProvider, monitor: monitor)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
                     }
                     if isCodexEnabled {
                         CodexConfigCard(monitor: monitor)

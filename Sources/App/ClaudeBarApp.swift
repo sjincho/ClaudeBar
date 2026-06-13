@@ -56,7 +56,21 @@ struct ClaudeBarApp: App {
                 apiProbe: ClaudeAPIUsageProbe(),
                 passProbe: ClaudePassProbe(),
                 settingsRepository: settingsRepository,
-                dailyUsageAnalyzer: ClaudeDailyUsageAnalyzer()
+                dailyUsageAnalyzer: ClaudeDailyUsageAnalyzer(),
+                cliProbeFactory: { config in
+                    let rawPath = config.probeConfig[ClaudeAccountProbeConfig.claudeConfigDir]
+                        ?? config.probeConfig[ClaudeAccountProbeConfig.claudeConfigDirEnv]
+                    let normalizedPath = rawPath?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let configDirectory = normalizedPath.flatMap { path -> URL? in
+                        guard !path.isEmpty else { return nil }
+                        return URL(
+                            fileURLWithPath: (path as NSString).expandingTildeInPath,
+                            isDirectory: true
+                        )
+                    }
+                    return ClaudeUsageProbe(claudeConfigDirectory: configDirectory)
+                }
             ),
             CodexProvider(
                 rpcProbe: CodexUsageProbe(),

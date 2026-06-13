@@ -354,6 +354,15 @@ struct MenuContentView: View {
             }
         } else if let provider = selectedProvider, let snapshot = provider.snapshot {
             VStack(spacing: 12) {
+                if let multiAccountProvider = provider as? (any MultiAccountProvider),
+                   multiAccountProvider.accounts.count > 1 {
+                    AccountPickerView(provider: multiAccountProvider) { accountId in
+                        _ = multiAccountProvider.switchAccount(to: accountId)
+                        Task {
+                            await refresh(providerId: provider.id)
+                        }
+                    }
+                }
                 if let displayName = snapshot.accountEmail ?? snapshot.accountOrganization {
                     accountCard(displayName: displayName, snapshot: snapshot)
                 }
@@ -717,10 +726,14 @@ struct MenuContentView: View {
             for provider in monitor.enabledProviders {
                 group.addTask {
                     guard !provider.isSyncing else { return }
-                    do {
-                        try await provider.refresh()
-                    } catch {
-                        // Provider stores error in lastError
+                    if let multiAccountProvider = provider as? (any MultiAccountProvider) {
+                        await multiAccountProvider.refreshAllAccounts()
+                    } else {
+                        do {
+                            try await provider.refresh()
+                        } catch {
+                            // Provider stores error in lastError
+                        }
                     }
                 }
             }
@@ -736,10 +749,14 @@ struct MenuContentView: View {
         // Provider.isSyncing is observable - prevents duplicate refreshes
         guard !provider.isSyncing else { return }
 
-        do {
-            try await provider.refresh()
-        } catch {
-            // Provider stores error in lastError
+        if let multiAccountProvider = provider as? (any MultiAccountProvider) {
+            await multiAccountProvider.refreshAllAccounts()
+        } else {
+            do {
+                try await provider.refresh()
+            } catch {
+                // Provider stores error in lastError
+            }
         }
     }
 

@@ -111,6 +111,79 @@ struct JSONSettingsRepositoryProviderTests {
         #expect(repo.customCardURL(forProvider: "gemini") == nil)
     }
 
+    // MARK: - Multi-Account Settings
+
+    @Test
+    func `accounts default to empty array`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        #expect(repo.accounts(forProvider: "claude").isEmpty)
+    }
+
+    @Test
+    func `addAccount persists provider account config`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        let config = ProviderAccountConfig(
+            accountId: "work",
+            label: "Work",
+            email: "me@work.example",
+            organization: "Work Org",
+            probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+        )
+
+        repo.addAccount(config, forProvider: "claude")
+
+        #expect(repo.accounts(forProvider: "claude") == [config])
+    }
+
+    @Test
+    func `updateAccount replaces matching account`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        repo.addAccount(
+            ProviderAccountConfig(accountId: "work", label: "Work"),
+            forProvider: "claude"
+        )
+
+        let updated = ProviderAccountConfig(
+            accountId: "work",
+            label: "Work Main",
+            probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work-main"]
+        )
+        repo.updateAccount(updated, forProvider: "claude")
+
+        #expect(repo.accounts(forProvider: "claude") == [updated])
+    }
+
+    @Test
+    func `removeAccount clears active account when removed`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        repo.addAccount(ProviderAccountConfig(accountId: "work", label: "Work"), forProvider: "claude")
+        repo.addAccount(ProviderAccountConfig(accountId: "personal", label: "Personal"), forProvider: "claude")
+        repo.setActiveAccountId("work", forProvider: "claude")
+
+        repo.removeAccount(accountId: "work", forProvider: "claude")
+
+        #expect(repo.accounts(forProvider: "claude").map(\.accountId) == ["personal"])
+        #expect(repo.activeAccountId(forProvider: "claude") == "personal")
+    }
+
+    @Test
+    func `activeAccountId persists value`() {
+        let (repo, dir) = makeRepository()
+        defer { cleanup(dir) }
+
+        repo.setActiveAccountId("work", forProvider: "claude")
+
+        #expect(repo.activeAccountId(forProvider: "claude") == "work")
+    }
+
     // MARK: - Claude Settings
 
     @Test

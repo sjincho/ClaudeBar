@@ -221,7 +221,10 @@ struct DefaultCodexRPCClientTests {
         let mockTransport = MockRPCTransport()
         let client = DefaultCodexRPCClient(transport: mockTransport)
 
-        let futureDate = Date().addingTimeInterval(2 * 86400 + 3 * 3600 + 30 * 60) // 2d 3h 30m
+        let twoDays: TimeInterval = 2 * 86400
+        let threeHours: TimeInterval = 3 * 3600
+        let thirtyMinutes: TimeInterval = 30 * 60
+        let futureDate = Date().addingTimeInterval(twoDays + threeHours + thirtyMinutes)
         let result = client.formatResetTime(futureDate)
 
         #expect(result.contains("Resets in"))

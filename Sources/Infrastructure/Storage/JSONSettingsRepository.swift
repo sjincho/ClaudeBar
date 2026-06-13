@@ -17,6 +17,7 @@ public final class JSONSettingsRepository:
     KimiSettingsRepository,
     MiniMaxSettingsRepository,
     AlibabaSettingsRepository,
+    MultiAccountSettingsRepository,
     HookSettingsRepository,
     @unchecked Sendable
 {
@@ -190,6 +191,61 @@ public final class JSONSettingsRepository:
     public func setCustomCardURL(_ url: String?, forProvider id: String) {
         let value: Any? = (url?.isEmpty == false) ? url : nil
         store.write(value: value, key: "providers.\(id).customCardURL")
+    }
+
+    // MARK: - MultiAccountSettingsRepository
+
+    public func accounts(forProvider id: String) -> [ProviderAccountConfig] {
+        guard let rawAccounts: [[String: Any]] = store.read(key: "providers.\(id).accounts"),
+              JSONSerialization.isValidJSONObject(rawAccounts),
+              let data = try? JSONSerialization.data(withJSONObject: rawAccounts),
+              let configs = try? JSONDecoder().decode([ProviderAccountConfig].self, from: data) else {
+            return []
+        }
+        return configs
+    }
+
+    public func addAccount(_ config: ProviderAccountConfig, forProvider id: String) {
+        var configs = accounts(forProvider: id)
+        configs.removeAll { $0.accountId == config.accountId }
+        configs.append(config)
+        writeAccounts(configs, forProvider: id)
+    }
+
+    public func removeAccount(accountId: String, forProvider id: String) {
+        var configs = accounts(forProvider: id)
+        configs.removeAll { $0.accountId == accountId }
+        writeAccounts(configs, forProvider: id)
+
+        if activeAccountId(forProvider: id) == accountId {
+            setActiveAccountId(configs.first?.accountId, forProvider: id)
+        }
+    }
+
+    public func updateAccount(_ config: ProviderAccountConfig, forProvider id: String) {
+        var configs = accounts(forProvider: id)
+        if let index = configs.firstIndex(where: { $0.accountId == config.accountId }) {
+            configs[index] = config
+        } else {
+            configs.append(config)
+        }
+        writeAccounts(configs, forProvider: id)
+    }
+
+    public func activeAccountId(forProvider id: String) -> String? {
+        store.read(key: "providers.\(id).activeAccountId")
+    }
+
+    public func setActiveAccountId(_ accountId: String?, forProvider id: String) {
+        store.write(value: accountId, key: "providers.\(id).activeAccountId")
+    }
+
+    private func writeAccounts(_ configs: [ProviderAccountConfig], forProvider id: String) {
+        guard let data = try? JSONEncoder().encode(configs),
+              let raw = try? JSONSerialization.jsonObject(with: data) else {
+            return
+        }
+        store.write(value: raw, key: "providers.\(id).accounts")
     }
 
     // MARK: - ClaudeSettingsRepository

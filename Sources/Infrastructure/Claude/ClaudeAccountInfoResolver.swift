@@ -7,9 +7,9 @@ import Domain
 public final class ClaudeAccountInfoResolver: AccountInfoResolving, Sendable {
     private let configURL: URL
 
-    public init(configURL: URL? = nil) {
+    public init(configURL: URL? = nil, configDirectory: URL? = nil) {
         self.configURL = configURL ?? {
-            let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+            let configDir = configDirectory ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
                 .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
             return (configDir ?? FileManager.default.homeDirectoryForCurrentUser)
                 .appendingPathComponent(".claude.json")
@@ -27,13 +27,14 @@ public final class ClaudeAccountInfoResolver: AccountInfoResolving, Sendable {
         }
 
         let email = oauthAccount["emailAddress"] as? String
-        let displayName = oauthAccount["displayName"] as? String
+        let organization = oauthAccount["organizationName"] as? String
+            ?? oauthAccount["displayName"] as? String
 
-        guard email != nil || displayName != nil else { return nil }
+        guard email != nil || organization != nil else { return nil }
 
         return AccountInfo(
             email: email,
-            organization: displayName
+            organization: organization
         )
     }
 }

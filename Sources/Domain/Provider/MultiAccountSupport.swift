@@ -38,8 +38,19 @@ public protocol MultiAccountProvider: AIProvider {
     @discardableResult
     func refreshAccount(_ accountId: String) async throws -> UsageSnapshot
 
-    /// Refreshes all accounts concurrently.
+    /// Refreshes a specific account's usage data for the given refresh kind.
+    /// - Parameters:
+    ///   - accountId: The account to refresh
+    ///   - kind: Whether the refresh is user-driven or background polling
+    /// - Returns: The updated snapshot
+    @discardableResult
+    func refreshAccount(_ accountId: String, kind: RefreshKind) async throws -> UsageSnapshot
+
+    /// Refreshes all accounts.
     func refreshAllAccounts() async
+
+    /// Refreshes all accounts for the given refresh kind.
+    func refreshAllAccounts(_ kind: RefreshKind) async
 
     /// The aggregate status across all accounts (worst status wins).
     var aggregateStatus: QuotaStatus { get }
@@ -51,6 +62,19 @@ public protocol MultiAccountProvider: AIProvider {
 // MARK: - Default Implementations
 
 public extension MultiAccountProvider {
+    /// Kind-aware variant used by monitor loops. Providers can override this
+    /// to skip expensive non-glanceable work during background refreshes.
+    @discardableResult
+    func refreshAccount(_ accountId: String, kind: RefreshKind) async throws -> UsageSnapshot {
+        try await refreshAccount(accountId)
+    }
+
+    /// Kind-aware variant used by monitor loops. Providers can override this
+    /// to skip expensive non-glanceable work during background refreshes.
+    func refreshAllAccounts(_ kind: RefreshKind) async {
+        await refreshAllAccounts()
+    }
+
     /// Default: aggregate status is the worst across all account snapshots
     var aggregateStatus: QuotaStatus {
         accountSnapshots.values

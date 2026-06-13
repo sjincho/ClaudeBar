@@ -139,6 +139,27 @@ struct ClaudeProviderDailyUsageTests {
     }
 
     @Test
+    func `multi-account background refresh through protocol skips the daily usage scan`() async {
+        let settings = FakeMultiAccountSettings(accounts: [
+            ProviderAccountConfig(accountId: "work", label: "Work")
+        ])
+        let mockProbe = MockUsageProbe()
+        given(mockProbe).probe().willReturn(makeSnapshot())
+        let analyzer = CountingDailyUsageAnalyzer(report: makeTodayReport())
+        let claude = ClaudeProvider(
+            probe: mockProbe,
+            settingsRepository: settings,
+            dailyUsageAnalyzer: analyzer
+        )
+        let provider: any MultiAccountProvider = claude
+
+        await provider.refreshAllAccounts(.background)
+
+        #expect(analyzer.calls == 0)
+        #expect(provider.accountSnapshots["work"]?.dailyUsageReport == nil)
+    }
+
+    @Test
     func `interactive refresh runs the daily usage scan and attaches the report`() async throws {
         let settings = makeSettingsRepository()
         let mockProbe = MockUsageProbe()
@@ -150,5 +171,25 @@ struct ClaudeProviderDailyUsageTests {
 
         #expect(analyzer.calls == 1)
         #expect(snapshot.dailyUsageReport != nil)
+    }
+
+    private final class FakeMultiAccountSettings: MultiAccountSettingsRepository, @unchecked Sendable {
+        private let accountConfigs: [ProviderAccountConfig]
+
+        init(accounts: [ProviderAccountConfig]) {
+            self.accountConfigs = accounts
+        }
+
+        func isEnabled(forProvider id: String) -> Bool { true }
+        func isEnabled(forProvider id: String, defaultValue: Bool) -> Bool { true }
+        func setEnabled(_ enabled: Bool, forProvider id: String) {}
+        func customCardURL(forProvider id: String) -> String? { nil }
+        func setCustomCardURL(_ url: String?, forProvider id: String) {}
+        func accounts(forProvider id: String) -> [ProviderAccountConfig] { accountConfigs }
+        func addAccount(_ config: ProviderAccountConfig, forProvider id: String) {}
+        func removeAccount(accountId: String, forProvider id: String) {}
+        func updateAccount(_ config: ProviderAccountConfig, forProvider id: String) {}
+        func activeAccountId(forProvider id: String) -> String? { accountConfigs.first?.accountId }
+        func setActiveAccountId(_ accountId: String?, forProvider id: String) {}
     }
 }

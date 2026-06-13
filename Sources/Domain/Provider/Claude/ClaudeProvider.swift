@@ -1,11 +1,16 @@
 import Foundation
 import Observation
 
+public enum ClaudeAccountProbeConfig {
+    public static let claudeConfigDir = "claudeConfigDir"
+    public static let claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
+}
+
 /// Claude AI provider - a rich domain model.
 /// Observable class with its own state (isSyncing, snapshot, error).
 /// Supports dual probe modes: CLI (default) and API.
 @Observable
-public final class ClaudeProvider: AIProvider, @unchecked Sendable {
+public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     // MARK: - Identity (Protocol Requirement)
 
     public let id: String = "claude"
@@ -34,6 +39,9 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
 
     /// The current usage snapshot (nil if never refreshed or unavailable)
     public private(set) var snapshot: UsageSnapshot?
+
+    /// Usage snapshots for each configured Claude account.
+    public private(set) var accountSnapshots: [String: UsageSnapshot] = [:]
 
     /// The last error that occurred during refresh
     public private(set) var lastError: Error?
@@ -79,6 +87,9 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
     /// The CLI probe for fetching usage data via `claude /usage`
     private let cliProbe: any UsageProbe
 
+    /// Factory for account-specific CLI probes.
+    private let cliProbeFactory: @Sendable (ProviderAccountConfig) -> any UsageProbe
+
     /// The API probe for fetching usage data via HTTP API (optional)
     private let apiProbe: (any UsageProbe)?
 
@@ -90,6 +101,42 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
 
     /// Optional analyzer for daily usage from JSONL session data
     private let dailyUsageAnalyzer: (any DailyUsageAnalyzing)?
+
+    private var multiAccountSettingsRepository: (any MultiAccountSettingsRepository)? {
+        settingsRepository as? (any MultiAccountSettingsRepository)
+    }
+
+    private var defaultAccountConfig: ProviderAccountConfig {
+        ProviderAccountConfig(
+            accountId: ProviderAccount.defaultAccountId,
+            label: name
+        )
+    }
+
+    private var accountConfigs: [ProviderAccountConfig] {
+        guard let multiAccountSettingsRepository else {
+            return [defaultAccountConfig]
+        }
+        let configured = multiAccountSettingsRepository.accounts(forProvider: id)
+        return configured.isEmpty ? [defaultAccountConfig] : configured
+    }
+
+    private var activeAccountConfig: ProviderAccountConfig {
+        let configs = accountConfigs
+        if let activeId = multiAccountSettingsRepository?.activeAccountId(forProvider: id),
+           let active = configs.first(where: { $0.accountId == activeId }) {
+            return active
+        }
+        return configs.first ?? defaultAccountConfig
+    }
+
+    public var accounts: [ProviderAccount] {
+        accountConfigs.map(providerAccount(from:))
+    }
+
+    public var activeAccount: ProviderAccount {
+        providerAccount(from: activeAccountConfig)
+    }
 
     /// Returns the active probe based on current mode
     private var activeProbe: any UsageProbe {
@@ -113,9 +160,11 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
         probe: any UsageProbe,
         passProbe: (any ClaudePassProbing)? = nil,
         settingsRepository: any ProviderSettingsRepository,
-        dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil
+        dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
+        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil
     ) {
         self.cliProbe = probe
+        self.cliProbeFactory = cliProbeFactory ?? { _ in probe }
         self.apiProbe = nil
         self.passProbe = passProbe
         self.settingsRepository = settingsRepository
@@ -135,9 +184,11 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
         apiProbe: any UsageProbe,
         passProbe: (any ClaudePassProbing)? = nil,
         settingsRepository: any ClaudeSettingsRepository,
-        dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil
+        dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
+        cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil
     ) {
         self.cliProbe = cliProbe
+        self.cliProbeFactory = cliProbeFactory ?? { _ in cliProbe }
         self.apiProbe = apiProbe
         self.passProbe = passProbe
         self.settingsRepository = settingsRepository
@@ -186,34 +237,135 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
     /// (issue #204).
     @discardableResult
     public func refresh(_ kind: RefreshKind) async throws -> UsageSnapshot {
+        try await refreshAccount(activeAccount.accountId, kind: kind)
+    }
+
+    @discardableResult
+    public func refreshAccount(_ accountId: String) async throws -> UsageSnapshot {
+        try await refreshAccount(accountId, kind: .interactive)
+    }
+
+    @discardableResult
+    public func refreshAccount(_ accountId: String, kind: RefreshKind) async throws -> UsageSnapshot {
         isSyncing = true
         defer { isSyncing = false }
 
+        guard let config = accountConfigs.first(where: { $0.accountId == accountId }) else {
+            let error = ProbeError.executionFailed("Claude account not found: \(accountId)")
+            lastError = error
+            throw error
+        }
+
         do {
-            let newSnapshot = try await primaryProbe().probe()
-            snapshot = await report(for: newSnapshot, kind: kind)
+            let newSnapshot = try await refreshAccountConfig(config, kind: kind)
+            accountSnapshots[accountId] = newSnapshot
+            if activeAccount.accountId == accountId {
+                snapshot = newSnapshot
+            }
             lastError = nil
-            return snapshot!
+            return newSnapshot
+        } catch {
+            lastError = error
+            throw error
+        }
+    }
+
+    public func refreshAllAccounts() async {
+        await refreshAllAccounts(.interactive)
+    }
+
+    public func refreshAllAccounts(_ kind: RefreshKind) async {
+        isSyncing = true
+        defer { isSyncing = false }
+
+        var refreshedAnyAccount = false
+        var latestError: Error?
+
+        for config in accountConfigs {
+            do {
+                let newSnapshot = try await refreshAccountConfig(config, kind: kind)
+                accountSnapshots[config.accountId] = newSnapshot
+                refreshedAnyAccount = true
+            } catch {
+                latestError = error
+            }
+        }
+
+        snapshot = accountSnapshots[activeAccount.accountId]
+        lastError = refreshedAnyAccount ? nil : latestError
+    }
+
+    @discardableResult
+    public func switchAccount(to accountId: String) -> Bool {
+        guard accountConfigs.contains(where: { $0.accountId == accountId }) else {
+            return false
+        }
+
+        multiAccountSettingsRepository?.setActiveAccountId(accountId, forProvider: id)
+        snapshot = accountSnapshots[accountId]
+        return true
+    }
+
+    @discardableResult
+    public func addCLIAccount(label: String, configDirectoryPath: String) -> Bool {
+        guard let multiAccountSettingsRepository else { return false }
+
+        let trimmedPath = configDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return false }
+
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayLabel = trimmedLabel.isEmpty
+            ? URL(fileURLWithPath: trimmedPath).lastPathComponent
+            : trimmedLabel
+        let accountId = uniqueAccountId(seed: displayLabel)
+        let config = ProviderAccountConfig(
+            accountId: accountId,
+            label: displayLabel,
+            probeConfig: [
+                ClaudeAccountProbeConfig.claudeConfigDir: trimmedPath
+            ]
+        )
+
+        multiAccountSettingsRepository.addAccount(config, forProvider: id)
+        if multiAccountSettingsRepository.activeAccountId(forProvider: id) == nil {
+            multiAccountSettingsRepository.setActiveAccountId(accountId, forProvider: id)
+        }
+        return true
+    }
+
+    public func removeAccount(accountId: String) {
+        guard accountId != ProviderAccount.defaultAccountId else { return }
+        multiAccountSettingsRepository?.removeAccount(accountId: accountId, forProvider: id)
+        accountSnapshots.removeValue(forKey: accountId)
+        snapshot = accountSnapshots[activeAccount.accountId]
+    }
+
+    private func refreshAccountConfig(
+        _ config: ProviderAccountConfig,
+        kind: RefreshKind
+    ) async throws -> UsageSnapshot {
+        let probe = primaryProbe(for: config)
+
+        do {
+            let newSnapshot = try await probe.probe()
+            return await report(for: newSnapshot, kind: kind)
         } catch let primaryError {
-            if Self.shouldAttemptFallback(after: primaryError),
-               let fallback = await fallbackProbe() {
-                do {
-                    let newSnapshot = try await fallback.probe()
-                    snapshot = await report(for: newSnapshot, kind: kind)
-                    lastError = nil
-                    return snapshot!
-                } catch {
-                    // Both probes failed. Surface the primary error — it is
-                    // the actual root cause (e.g. HTTP 429). The fallback's
-                    // failure is incidental and would otherwise mask it,
-                    // sending users chasing the wrong problem.
-                    lastError = primaryError
-                    throw primaryError
-                }
+            guard !usesAccountSpecificCLI(config),
+                  Self.shouldAttemptFallback(after: primaryError),
+                  let fallback = await fallbackProbe() else {
+                throw primaryError
             }
 
-            lastError = primaryError
-            throw primaryError
+            do {
+                let newSnapshot = try await fallback.probe()
+                return await report(for: newSnapshot, kind: kind)
+            } catch {
+                // Both probes failed. Surface the primary error — it is
+                // the actual root cause (e.g. HTTP 429). The fallback's
+                // failure is incidental and would otherwise mask it,
+                // sending users chasing the wrong problem.
+                throw primaryError
+            }
         }
     }
 
@@ -240,6 +392,59 @@ public final class ClaudeProvider: AIProvider, @unchecked Sendable {
         case .background:
             return snapshot
         }
+    }
+
+    private func providerAccount(from config: ProviderAccountConfig) -> ProviderAccount {
+        let snapshot = accountSnapshots[config.accountId]
+        return ProviderAccount(
+            accountId: config.accountId,
+            providerId: id,
+            label: config.label,
+            email: config.email ?? snapshot?.accountEmail,
+            organization: config.organization ?? snapshot?.accountOrganization
+        )
+    }
+
+    private func primaryProbe(for config: ProviderAccountConfig) -> any UsageProbe {
+        usesAccountSpecificCLI(config) ? cliProbeFactory(config) : primaryProbe()
+    }
+
+    private func usesAccountSpecificCLI(_ config: ProviderAccountConfig) -> Bool {
+        claudeConfigDirectoryPath(for: config) != nil
+    }
+
+    private func claudeConfigDirectoryPath(for config: ProviderAccountConfig) -> String? {
+        let path = config.probeConfig[ClaudeAccountProbeConfig.claudeConfigDir]
+            ?? config.probeConfig[ClaudeAccountProbeConfig.claudeConfigDirEnv]
+        let trimmedPath = path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedPath, !trimmedPath.isEmpty else {
+            return nil
+        }
+        return trimmedPath
+    }
+
+    private func uniqueAccountId(seed: String) -> String {
+        let base = sanitizedAccountId(from: seed)
+        let existing = Set(accountConfigs.map(\.accountId))
+        guard existing.contains(base) else { return base }
+
+        var suffix = 2
+        while existing.contains("\(base)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(base)-\(suffix)"
+    }
+
+    private func sanitizedAccountId(from seed: String) -> String {
+        let raw = seed
+            .lowercased()
+            .map { character -> Character in
+                character.isLetter || character.isNumber ? character : "-"
+            }
+        let slug = String(raw)
+            .split(separator: "-")
+            .joined(separator: "-")
+        return slug.isEmpty ? "account" : slug
     }
 
     /// Attaches daily usage report to snapshot if analyzer is available.

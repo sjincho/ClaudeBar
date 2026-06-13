@@ -27,6 +27,24 @@ struct ClaudeAccountInfoResolverTests {
     }
 
     @Test
+    func `prefers organizationName over displayName`() {
+        let resolver = makeResolverWithConfig("""
+        {
+            "oauthAccount": {
+                "emailAddress": "user@example.com",
+                "organizationName": "Acme",
+                "displayName": "testuser"
+            }
+        }
+        """)
+
+        let result = resolver.resolve()
+
+        #expect(result?.email == "user@example.com")
+        #expect(result?.organization == "Acme")
+    }
+
+    @Test
     func `resolves email only when displayName is absent`() {
         let resolver = makeResolverWithConfig("""
         {

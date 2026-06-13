@@ -277,9 +277,135 @@ struct ClaudeProviderTests {
         // CLI mode imposes no floor — it keeps the user's chosen interval.
         #expect(claude.backgroundRefreshFloor == nil)
     }
+
+    // MARK: - Multi-Account Support
+
+    @Test
+    func `multi-account provider exposes configured accounts`() {
+        let settings = FakeMultiAccountClaudeSettings(accounts: [
+            ProviderAccountConfig(
+                accountId: "work",
+                label: "Work",
+                email: "me@work.example",
+                organization: "Work Org",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+            ),
+            ProviderAccountConfig(
+                accountId: "personal",
+                label: "Personal",
+                email: "me@example.com",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/personal"]
+            ),
+        ])
+        let claude = ClaudeProvider(probe: StaticUsageProbe(email: "default@example.com"), settingsRepository: settings)
+
+        #expect(claude.accounts.map(\.accountId) == ["work", "personal"])
+        #expect(claude.activeAccount.accountId == "work")
+        #expect(claude.activeAccount.email == "me@work.example")
+    }
+
+    @Test
+    func `refreshAllAccounts stores snapshots for each configured account`() async {
+        let settings = FakeMultiAccountClaudeSettings(accounts: [
+            ProviderAccountConfig(
+                accountId: "work",
+                label: "Work",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+            ),
+            ProviderAccountConfig(
+                accountId: "personal",
+                label: "Personal",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/personal"]
+            ),
+        ])
+        let claude = ClaudeProvider(
+            probe: StaticUsageProbe(email: "default@example.com"),
+            settingsRepository: settings,
+            cliProbeFactory: { config in
+                StaticUsageProbe(email: "\(config.accountId)@example.com")
+            }
+        )
+
+        await claude.refreshAllAccounts()
+
+        #expect(claude.accountSnapshots["work"]?.accountEmail == "work@example.com")
+        #expect(claude.accountSnapshots["personal"]?.accountEmail == "personal@example.com")
+        #expect(claude.snapshot?.accountEmail == "work@example.com")
+    }
+
+    @Test
+    func `switchAccount persists active account and updates snapshot`() async {
+        let settings = FakeMultiAccountClaudeSettings(accounts: [
+            ProviderAccountConfig(
+                accountId: "work",
+                label: "Work",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/work"]
+            ),
+            ProviderAccountConfig(
+                accountId: "personal",
+                label: "Personal",
+                probeConfig: [ClaudeAccountProbeConfig.claudeConfigDir: "/tmp/personal"]
+            ),
+        ])
+        let claude = ClaudeProvider(
+            probe: StaticUsageProbe(email: "default@example.com"),
+            settingsRepository: settings,
+            cliProbeFactory: { config in
+                StaticUsageProbe(email: "\(config.accountId)@example.com")
+            }
+        )
+
+        await claude.refreshAllAccounts()
+        let switched = claude.switchAccount(to: "personal")
+
+        #expect(switched)
+        #expect(settings.activeAccountId(forProvider: "claude") == "personal")
+        #expect(claude.activeAccount.accountId == "personal")
+        #expect(claude.snapshot?.accountEmail == "personal@example.com")
+    }
+
+    @Test
+    func `addCLIAccount persists a Claude config directory account`() {
+        let settings = FakeMultiAccountClaudeSettings()
+        let claude = ClaudeProvider(probe: StaticUsageProbe(email: "default@example.com"), settingsRepository: settings)
+
+        let added = claude.addCLIAccount(
+            label: "Work Main",
+            configDirectoryPath: "/private/tmp/claude-usage-poc-config/work-main"
+        )
+
+        #expect(added)
+        #expect(settings.accounts(forProvider: "claude").count == 1)
+        #expect(settings.accounts(forProvider: "claude").first?.accountId == "work-main")
+        #expect(settings.accounts(forProvider: "claude").first?.probeConfig[ClaudeAccountProbeConfig.claudeConfigDir] == "/private/tmp/claude-usage-poc-config/work-main")
+        #expect(settings.activeAccountId(forProvider: "claude") == "work-main")
+    }
 }
 
 // MARK: - Test Helpers
+
+private struct StaticUsageProbe: UsageProbe {
+    let email: String
+
+    func probe() async throws -> UsageSnapshot {
+        UsageSnapshot(
+            providerId: "claude",
+            quotas: [
+                UsageQuota(
+                    percentRemaining: 50,
+                    quotaType: .session,
+                    providerId: "claude"
+                )
+            ],
+            capturedAt: Date(),
+            accountEmail: email
+        )
+    }
+
+    func isAvailable() async -> Bool {
+        true
+    }
+}
 
 private final class FakeClaudeSettings: ClaudeSettingsRepository, @unchecked Sendable {
     var probeMode: ClaudeProbeMode
@@ -299,4 +425,65 @@ private final class FakeClaudeSettings: ClaudeSettingsRepository, @unchecked Sen
     func setClaudeProbeMode(_ mode: ClaudeProbeMode) { probeMode = mode }
     func claudeCliFallbackEnabled() -> Bool { cliFallbackEnabled }
     func setClaudeCliFallbackEnabled(_ enabled: Bool) { cliFallbackEnabled = enabled }
+}
+
+private final class FakeMultiAccountClaudeSettings: ClaudeSettingsRepository, MultiAccountSettingsRepository, @unchecked Sendable {
+    var probeMode: ClaudeProbeMode
+    var cliFallbackEnabled: Bool
+    private var accountConfigs: [ProviderAccountConfig]
+    private var activeAccount: String?
+
+    init(
+        probeMode: ClaudeProbeMode = .cli,
+        cliFallbackEnabled: Bool = true,
+        accounts: [ProviderAccountConfig] = [],
+        activeAccountId: String? = nil
+    ) {
+        self.probeMode = probeMode
+        self.cliFallbackEnabled = cliFallbackEnabled
+        self.accountConfigs = accounts
+        self.activeAccount = activeAccountId
+    }
+
+    func isEnabled(forProvider id: String) -> Bool { true }
+    func isEnabled(forProvider id: String, defaultValue: Bool) -> Bool { true }
+    func setEnabled(_ enabled: Bool, forProvider id: String) {}
+    func customCardURL(forProvider id: String) -> String? { nil }
+    func setCustomCardURL(_ url: String?, forProvider id: String) {}
+    func claudeProbeMode() -> ClaudeProbeMode { probeMode }
+    func setClaudeProbeMode(_ mode: ClaudeProbeMode) { probeMode = mode }
+    func claudeCliFallbackEnabled() -> Bool { cliFallbackEnabled }
+    func setClaudeCliFallbackEnabled(_ enabled: Bool) { cliFallbackEnabled = enabled }
+
+    func accounts(forProvider id: String) -> [ProviderAccountConfig] {
+        accountConfigs
+    }
+
+    func addAccount(_ config: ProviderAccountConfig, forProvider id: String) {
+        accountConfigs.removeAll { $0.accountId == config.accountId }
+        accountConfigs.append(config)
+    }
+
+    func removeAccount(accountId: String, forProvider id: String) {
+        accountConfigs.removeAll { $0.accountId == accountId }
+        if activeAccount == accountId {
+            activeAccount = accountConfigs.first?.accountId
+        }
+    }
+
+    func updateAccount(_ config: ProviderAccountConfig, forProvider id: String) {
+        if let index = accountConfigs.firstIndex(where: { $0.accountId == config.accountId }) {
+            accountConfigs[index] = config
+        } else {
+            accountConfigs.append(config)
+        }
+    }
+
+    func activeAccountId(forProvider id: String) -> String? {
+        activeAccount
+    }
+
+    func setActiveAccountId(_ accountId: String?, forProvider id: String) {
+        activeAccount = accountId
+    }
 }

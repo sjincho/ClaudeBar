@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Domain
 
 /// Settings card for managing accounts on a multi-account provider.
@@ -13,6 +14,9 @@ struct AccountManagementCard: View {
     @Environment(\.appTheme) private var theme
     @State private var isExpanded = false
     @State private var showAddSheet = false
+    @State private var newAccountLabel = ""
+    @State private var newConfigDirectory = ""
+    @State private var addAccountError: String?
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
@@ -45,6 +49,9 @@ struct AccountManagementCard: View {
                         .stroke(theme.glassBorder, lineWidth: 1)
                 )
         )
+        .sheet(isPresented: $showAddSheet) {
+            addAccountSheet
+        }
     }
 
     // MARK: - Header
@@ -137,6 +144,9 @@ struct AccountManagementCard: View {
                 // Switch button
                 Button {
                     provider.switchAccount(to: account.accountId)
+                    Task {
+                        await monitor.refresh(providerId: provider.id)
+                    }
                 } label: {
                     Text("Switch")
                         .font(.system(size: 9, weight: .medium, design: theme.fontDesign))
@@ -150,6 +160,22 @@ struct AccountManagementCard: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            if !account.isDefault, let claudeProvider = provider as? ClaudeProvider {
+                Button {
+                    claudeProvider.removeAccount(accountId: account.accountId)
+                    Task {
+                        await monitor.refresh(providerId: provider.id)
+                    }
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.statusCritical)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("Remove account")
+            }
         }
         .padding(.vertical, 4)
     }
@@ -158,6 +184,7 @@ struct AccountManagementCard: View {
 
     private var addAccountButton: some View {
         Button {
+            resetAddForm()
             showAddSheet = true
         } label: {
             HStack(spacing: 6) {
@@ -176,5 +203,123 @@ struct AccountManagementCard: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(!(provider is ClaudeProvider))
+        .opacity(provider is ClaudeProvider ? 1 : 0.6)
+    }
+
+    private var addAccountSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Add Claude Account")
+                    .font(.system(size: 15, weight: .bold, design: theme.fontDesign))
+                    .foregroundStyle(theme.textPrimary)
+
+                Spacer()
+
+                Button {
+                    showAddSheet = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("LABEL")
+                    .font(.system(size: 9, weight: .semibold, design: theme.fontDesign))
+                    .foregroundStyle(theme.textSecondary)
+                    .tracking(0.5)
+
+                TextField("Work", text: $newAccountLabel)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CLAUDE CONFIG DIRECTORY")
+                    .font(.system(size: 9, weight: .semibold, design: theme.fontDesign))
+                    .foregroundStyle(theme.textSecondary)
+                    .tracking(0.5)
+
+                HStack(spacing: 8) {
+                    TextField("~/.claude-profiles/work", text: $newConfigDirectory)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        chooseConfigDirectory()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 22)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Choose folder")
+                }
+            }
+
+            if let addAccountError {
+                Text(addAccountError)
+                    .font(.system(size: 10, weight: .medium, design: theme.fontDesign))
+                    .foregroundStyle(theme.statusCritical)
+            }
+
+            HStack {
+                Spacer()
+
+                Button("Cancel") {
+                    showAddSheet = false
+                }
+
+                Button("Add") {
+                    addClaudeAccount()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(newConfigDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 420)
+        .background(theme.backgroundGradient)
+    }
+
+    private func resetAddForm() {
+        newAccountLabel = ""
+        newConfigDirectory = ""
+        addAccountError = nil
+    }
+
+    private func chooseConfigDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            newConfigDirectory = url.path
+        }
+    }
+
+    private func addClaudeAccount() {
+        guard let claudeProvider = provider as? ClaudeProvider else {
+            addAccountError = "This provider does not support adding accounts yet."
+            return
+        }
+
+        let added = claudeProvider.addCLIAccount(
+            label: newAccountLabel,
+            configDirectoryPath: newConfigDirectory
+        )
+        guard added else {
+            addAccountError = "Enter a Claude config directory."
+            return
+        }
+
+        showAddSheet = false
+        Task {
+            await monitor.refresh(providerId: provider.id)
+        }
     }
 }

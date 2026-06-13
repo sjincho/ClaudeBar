@@ -14,6 +14,7 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
     private let timeout: TimeInterval
     private let cliExecutor: CLIExecutor
     private let terminalRenderer: TerminalRenderer
+    private let claudeConfigDirectory: URL?
 
     /// Environment variables to strip from the CLI subprocess.
     /// `CLAUDE_CODE_OAUTH_TOKEN` is excluded because setup-tokens only have
@@ -27,13 +28,23 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
         claudeBinary: String = "claude",
         timeout: TimeInterval = 20.0,
         cliExecutor: CLIExecutor? = nil,
-        accountInfoResolver: any AccountInfoResolving = ClaudeAccountInfoResolver()
+        accountInfoResolver: (any AccountInfoResolving)? = nil,
+        claudeConfigDirectory: URL? = nil
     ) {
         self.claudeBinary = claudeBinary
         self.timeout = timeout
-        self.cliExecutor = cliExecutor ?? DefaultCLIExecutor(environmentExclusions: Self.envExclusions)
+        self.claudeConfigDirectory = claudeConfigDirectory
+        let environmentOverrides = claudeConfigDirectory.map {
+            ["CLAUDE_CONFIG_DIR": $0.path]
+        } ?? [:]
+        self.cliExecutor = cliExecutor ?? DefaultCLIExecutor(
+            environmentExclusions: Self.envExclusions,
+            environmentOverrides: environmentOverrides
+        )
         self.terminalRenderer = TerminalRenderer(cols: 160, rows: 50)
-        self.accountInfoResolver = accountInfoResolver
+        self.accountInfoResolver = accountInfoResolver ?? ClaudeAccountInfoResolver(
+            configDirectory: claudeConfigDirectory
+        )
     }
 
     public func isAvailable() async -> Bool {
@@ -46,7 +57,9 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
         AppLog.probes.error("Claude binary '\(claudeBinary)' not found in PATH")
         AppLog.probes.debug("Current directory: \(FileManager.default.currentDirectoryPath)")
         AppLog.probes.debug("PATH: \(env["PATH"] ?? "<not set>")")
-        if let configDir = env["CLAUDE_CONFIG_DIR"] {
+        if let claudeConfigDirectory {
+            AppLog.probes.debug("CLAUDE_CONFIG_DIR override: \(claudeConfigDirectory.path)")
+        } else if let configDir = env["CLAUDE_CONFIG_DIR"] {
             AppLog.probes.debug("CLAUDE_CONFIG_DIR: \(configDir)")
         }
         return false
@@ -882,7 +895,7 @@ public final class ClaudeUsageProbe: UsageProbe, @unchecked Sendable {
     /// won't show the workspace trust dialog on next invocation.
     /// Returns true if the write succeeded.
     internal func writeClaudeTrust(for directory: URL) -> Bool {
-        let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+        let configDir = claudeConfigDirectory ?? ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
             .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
         let claudeJsonURL = (configDir ?? FileManager.default.homeDirectoryForCurrentUser)
             .appendingPathComponent(".claude.json")
