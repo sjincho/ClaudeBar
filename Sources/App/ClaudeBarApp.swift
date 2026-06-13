@@ -69,7 +69,12 @@ struct ClaudeBarApp: App {
                             isDirectory: true
                         )
                     }
-                    return ClaudeUsageProbe(claudeConfigDirectory: configDirectory)
+                    guard let configDirectory else {
+                        return ClaudeUsageProbe(claudeConfigDirectory: nil)
+                    }
+                    // Fast path: read this account's token from its per-config-dir
+                    // Keychain item and hit the usage API directly — no CLI spawn.
+                    return ClaudeAccountAPIProbe(configDirectory: configDirectory)
                 }
             ),
             CodexProvider(

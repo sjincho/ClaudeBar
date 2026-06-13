@@ -87,8 +87,14 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     /// The CLI probe for fetching usage data via `claude /usage`
     private let cliProbe: any UsageProbe
 
-    /// Factory for account-specific CLI probes.
+    /// Factory for account-specific probes.
     private let cliProbeFactory: @Sendable (ProviderAccountConfig) -> any UsageProbe
+
+    /// Memoized account-specific probe instances, keyed by account ID. Probes are
+    /// created once and reused across refreshes so their internal state (snapshot
+    /// cache, rate-limit window) persists — otherwise every refresh would build a
+    /// fresh probe with an empty cache and hammer the upstream API.
+    private var accountProbes: [String: any UsageProbe] = [:]
 
     /// The API probe for fetching usage data via HTTP API (optional)
     private let apiProbe: (any UsageProbe)?
@@ -322,6 +328,11 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
 
         let configs = accountConfigs
 
+        // Materialize (and memoize) each account's probe serially first, so the
+        // concurrent tasks below only READ `accountProbes` (no data race) and so
+        // per-account caches/rate-limit state survive across refreshes.
+        for config in configs { _ = primaryProbe(for: config) }
+
         // Probe every account concurrently — the slow `claude /usage` calls
         // dominate wall-clock, and they're independent per account.
         let probed: [(String, Result<UsageSnapshot, Error>)] = await withTaskGroup(
@@ -403,6 +414,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         guard accountId != ProviderAccount.defaultAccountId else { return }
         multiAccountSettingsRepository?.removeAccount(accountId: accountId, forProvider: id)
         accountSnapshots.removeValue(forKey: accountId)
+        accountProbes.removeValue(forKey: accountId)
         snapshot = accountSnapshots[activeAccount.accountId]
     }
 
@@ -488,7 +500,13 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     }
 
     private func primaryProbe(for config: ProviderAccountConfig) -> any UsageProbe {
-        usesAccountSpecificCLI(config) ? cliProbeFactory(config) : primaryProbe()
+        guard usesAccountSpecificCLI(config) else { return primaryProbe() }
+        if let existing = accountProbes[config.accountId] {
+            return existing
+        }
+        let probe = cliProbeFactory(config)
+        accountProbes[config.accountId] = probe
+        return probe
     }
 
     private func usesAccountSpecificCLI(_ config: ProviderAccountConfig) -> Bool {

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 import Domain
 
 /// OAuth credentials loaded from Claude credential storage.
@@ -59,21 +60,48 @@ public struct ClaudeCredentialLoader: Sendable {
     /// Refresh buffer: 5 minutes before expiration
     private static let refreshBufferMs: Double = 5 * 60 * 1000
 
+    /// When set, this loader targets an account-specific Claude config dir rather
+    /// than the global `~/.claude`. Credentials then live at
+    /// `<configDirectory>/.credentials.json` (if any) or in the Keychain under the
+    /// per-config-dir service name (see `keychainServiceName(for:)`).
+    private let configDirectory: String?
+
     public init(
         homeDirectory: String = NSHomeDirectory(),
         keychainService: String = "Claude Code-credentials",
         useKeychain: Bool = true,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        configDirectory: String? = nil
     ) {
         self.homeDirectory = homeDirectory
-        self.keychainService = keychainService
         self.useKeychain = useKeychain
         self.environment = environment
+        self.configDirectory = configDirectory
+        // The Claude CLI stores each CLAUDE_CONFIG_DIR profile's token in a
+        // distinct Keychain item: `<base>-<first-8-hex-of-sha256(configDirPath)>`.
+        // The global (~/.claude) profile uses the bare service name.
+        if let configDirectory {
+            self.keychainService = Self.keychainServiceName(base: keychainService, forConfigDirectory: configDirectory)
+        } else {
+            self.keychainService = keychainService
+        }
+    }
+
+    /// The Keychain service name the Claude CLI uses for a given config directory:
+    /// the base service suffixed with the first 8 hex chars of the SHA-256 of the
+    /// directory's absolute path.
+    public static func keychainServiceName(base: String = "Claude Code-credentials", forConfigDirectory path: String) -> String {
+        let digest = SHA256.hash(data: Data(path.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "\(base)-\(hex.prefix(8))"
     }
 
     /// The path to the credentials file.
     public var credentialsFilePath: String {
-        (homeDirectory as NSString).appendingPathComponent(".claude/.credentials.json")
+        if let configDirectory {
+            return (configDirectory as NSString).appendingPathComponent(".credentials.json")
+        }
+        return (homeDirectory as NSString).appendingPathComponent(".claude/.credentials.json")
     }
 
     /// Loads credentials from file, Keychain, or environment.

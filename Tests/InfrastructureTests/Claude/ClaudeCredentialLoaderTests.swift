@@ -375,4 +375,19 @@ struct ClaudeCredentialLoaderTests {
         // So needsRefresh itself stays true, but the probe won't attempt refresh.
         #expect(loader.needsRefresh(oauth) == true)
     }
+
+    @Test
+    func `keychain service name is base plus first 8 hex of sha256(config dir)`() {
+        // The Claude CLI keys each CLAUDE_CONFIG_DIR profile's Keychain item as
+        // `<base>-<first 8 hex of sha256(absolute path)>`. Verified against the
+        // real items on macOS; here a portable SHA-256 vector locks the formula.
+        #expect(
+            ClaudeCredentialLoader.keychainServiceName(base: "svc", forConfigDirectory: "a")
+                == "svc-ca978112"
+        )
+        #expect(
+            ClaudeCredentialLoader.keychainServiceName(forConfigDirectory: "a")
+                == "Claude Code-credentials-ca978112"
+        )
+    }
 }

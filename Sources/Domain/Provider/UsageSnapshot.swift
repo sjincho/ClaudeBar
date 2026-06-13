@@ -60,6 +60,25 @@ public struct UsageSnapshot: Sendable, Equatable {
         self.extensionMetrics = extensionMetrics
     }
 
+    /// Returns a copy with account identity (email/organization) filled in. Used
+    /// when the usage source (e.g. the OAuth usage API) doesn't carry identity but
+    /// it can be resolved separately from the account's local config.
+    public func withAccountIdentity(email: String?, organization: String?) -> UsageSnapshot {
+        UsageSnapshot(
+            providerId: providerId,
+            quotas: quotas,
+            capturedAt: capturedAt,
+            accountEmail: email ?? accountEmail,
+            accountOrganization: organization ?? accountOrganization,
+            loginMethod: loginMethod,
+            accountTier: accountTier,
+            costUsage: costUsage,
+            bedrockUsage: bedrockUsage,
+            dailyUsageReport: dailyUsageReport,
+            extensionMetrics: extensionMetrics
+        )
+    }
+
     // MARK: - Domain Queries
 
     /// Finds a specific quota type from this snapshot
