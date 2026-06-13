@@ -99,11 +99,11 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
     /// Resolves the global (`~/.claude`) account's identity (email/org) cheaply,
     /// without a probe. Lets the provider decide up front whether the global is a
     /// duplicate of a configured profile — and skip its slow CLI probe if so.
-    private let defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)?
-    private var cachedDefaultInfo: (email: String?, organization: String?)?
+    private let defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)?
+    private var cachedDefaultInfo: (email: String?, organization: String?, budgetWeight: Double?)?
     private var didResolveDefaultInfo = false
 
-    private func resolvedDefaultAccountInfo() -> (email: String?, organization: String?)? {
+    private func resolvedDefaultAccountInfo() -> (email: String?, organization: String?, budgetWeight: Double?)? {
         if !didResolveDefaultInfo {
             cachedDefaultInfo = defaultAccountInfoProvider?()
             didResolveDefaultInfo = true
@@ -251,7 +251,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         settingsRepository: any ProviderSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
         cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
-        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)? = nil,
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil,
         systemDefaultActivator: (@Sendable (_ configDirectory: String) -> Bool)? = nil
     ) {
         self.cliProbe = probe
@@ -279,7 +279,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         settingsRepository: any ClaudeSettingsRepository,
         dailyUsageAnalyzer: (any DailyUsageAnalyzing)? = nil,
         cliProbeFactory: (@Sendable (ProviderAccountConfig) -> any UsageProbe)? = nil,
-        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?)?)? = nil,
+        defaultAccountInfoProvider: (@Sendable () -> (email: String?, organization: String?, budgetWeight: Double?)?)? = nil,
         systemDefaultActivator: (@Sendable (_ configDirectory: String) -> Bool)? = nil
     ) {
         self.cliProbe = cliProbe
@@ -421,7 +421,16 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         if let defaultConfig {
             if profileMatchingDefaultOrg == nil {
                 do {
-                    accountSnapshots[defaultConfig.accountId] = try await probeAccountConfig(defaultConfig)
+                    let raw = try await probeAccountConfig(defaultConfig)
+                    // The global probe doesn't resolve the tier, so stamp the
+                    // default account's budget weight (read cheaply from
+                    // ~/.claude.json) onto its snapshot — otherwise the heaviest
+                    // account (e.g. a Max 20x personal login) would count as
+                    // weight 1 and the weighted Combined would be wrong.
+                    let weight = resolvedDefaultAccountInfo()?.budgetWeight
+                    accountSnapshots[defaultConfig.accountId] = weight == nil
+                        ? raw
+                        : raw.withAccountIdentity(email: nil, organization: nil, budgetWeight: weight)
                     refreshedAnyAccount = true
                 } catch {
                     latestError = error
@@ -631,6 +640,7 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
             accountEmail: snapshot.accountEmail,
             accountOrganization: snapshot.accountOrganization,
             loginMethod: snapshot.loginMethod,
+            budgetWeight: snapshot.budgetWeight,
             accountTier: snapshot.accountTier,
             costUsage: snapshot.costUsage,
             bedrockUsage: snapshot.bedrockUsage,

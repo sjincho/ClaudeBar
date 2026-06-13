@@ -81,7 +81,7 @@ struct ClaudeBarApp: App {
                     // (no probe) so a global that duplicates a configured profile
                     // can be deduped/skipped up front.
                     ClaudeAccountInfoResolver().resolve().map {
-                        (email: $0.email, organization: $0.organization)
+                        (email: $0.email, organization: $0.organization, budgetWeight: $0.budgetWeight)
                     }
                 },
                 systemDefaultActivator: { configDir in
