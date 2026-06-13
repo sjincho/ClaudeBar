@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Domain
 
 /// OAuth credentials loaded from Claude credential storage.
@@ -255,8 +256,7 @@ public struct ClaudeCredentialLoader: Sendable {
     }
 
     private func saveToKeychain(_ data: [String: Any]) {
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted]),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted]) else {
             AppLog.credentials.error("Failed to serialize Claude credentials for Keychain")
             return
         }
@@ -270,24 +270,21 @@ public struct ClaudeCredentialLoader: Sendable {
         try? deleteProcess.run()
         deleteProcess.waitUntilExit()
 
-        // Add new item
-        let addProcess = Process()
-        addProcess.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        addProcess.arguments = ["add-generic-password", "-s", keychainService, "-w", jsonString]
-        addProcess.standardOutput = Pipe()
-        addProcess.standardError = Pipe()
+        // Add the new item via the Security framework rather than the `security`
+        // CLI. `add-generic-password -w <token>` would place the secret in the
+        // process arguments, briefly visible to `ps` for other local processes;
+        // SecItemAdd keeps it out of any command line.
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecValueData as String: jsonData,
+        ]
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
 
-        do {
-            try addProcess.run()
-            addProcess.waitUntilExit()
-
-            if addProcess.terminationStatus == 0 {
-                AppLog.credentials.info("Saved Claude credentials to Keychain")
-            } else {
-                AppLog.credentials.error("Failed to save Claude credentials to Keychain (exit code: \(addProcess.terminationStatus))")
-            }
-        } catch {
-            AppLog.credentials.error("Failed to save Claude credentials to Keychain: \(error.localizedDescription)")
+        if status == errSecSuccess {
+            AppLog.credentials.info("Saved Claude credentials to Keychain")
+        } else {
+            AppLog.credentials.error("Failed to save Claude credentials to Keychain (status: \(status))")
         }
     }
 }
