@@ -13,12 +13,17 @@ enum WidgetUsagePublisher {
             return
         }
         let activeId = provider.activeAccount.accountId
+        // Resolve each quota's percentage for the app's display mode (remaining
+        // vs used) here, so the sandboxed widget — which can't read settings —
+        // just renders the number it's given.
+        let mode = AppSettings.shared.usageDisplayMode
         let accounts: [WidgetAccountUsage] = provider.accounts.map { account in
             let snapshot = provider.accountSnapshots[account.accountId]
             let quotas: [WidgetQuota] = (snapshot?.quotas ?? []).map { quota in
                 WidgetQuota(
                     label: quota.quotaType.displayName,
                     percentRemaining: quota.percentRemaining,
+                    displayPercent: quota.displayPercent(mode: mode),
                     status: widgetStatus(quota.status)
                 )
             }
@@ -30,7 +35,8 @@ enum WidgetUsagePublisher {
                 quotas: quotas
             )
         }
-        let payload = WidgetUsagePayload(accounts: accounts, updatedAt: now)
+        let modeLabel = mode == .used ? "Used" : "Remaining"
+        let payload = WidgetUsagePayload(accounts: accounts, updatedAt: now, displayModeLabel: modeLabel)
         if let data = payload.encoded() {
             WidgetUsageServer.shared.update(data)
         }

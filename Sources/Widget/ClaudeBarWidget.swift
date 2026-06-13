@@ -56,7 +56,11 @@ struct ClaudeUsageWidgetView: View {
                 Text("Claude usage")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                if entry.payload == nil {
+                if let payload = entry.payload {
+                    Text(payload.displayModeLabel.lowercased())
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                } else {
                     Text("open ClaudeBar")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
@@ -65,7 +69,11 @@ struct ClaudeUsageWidgetView: View {
 
             if let accounts = entry.payload?.accounts, !accounts.isEmpty {
                 ForEach(accounts.prefix(maxAccounts)) { account in
-                    accountRow(account)
+                    if family == .systemLarge {
+                        accountDetail(account)
+                    } else {
+                        accountRow(account)
+                    }
                 }
                 Spacer(minLength: 0)
             } else {
@@ -89,8 +97,8 @@ struct ClaudeUsageWidgetView: View {
                 .frame(width: family == .systemLarge ? 110 : 80, alignment: .leading)
 
             if let quota = account.lowestQuota {
-                bar(percent: quota.percentRemaining, status: quota.status)
-                Text("\(Int(quota.percentRemaining.rounded()))%")
+                bar(percent: quota.displayPercent, status: quota.status)
+                Text("\(Int(quota.displayPercent.rounded()))%")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 32, alignment: .trailing)
@@ -101,6 +109,43 @@ struct ClaudeUsageWidgetView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Large family: account name + one labeled bar per quota (Session, Weekly, …).
+    @ViewBuilder
+    private func accountDetail(_ account: WidgetAccountUsage) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Text(account.label)
+                    .font(.system(size: 11, weight: account.isActive ? .semibold : .medium))
+                    .lineLimit(1)
+                if account.isActive {
+                    Text("default")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            if account.quotas.isEmpty {
+                Text("—").font(.system(size: 9)).foregroundStyle(.secondary)
+            } else {
+                ForEach(account.quotas.prefix(3), id: \.label) { quota in
+                    HStack(spacing: 6) {
+                        Text(quota.label)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(width: 58, alignment: .leading)
+                        bar(percent: quota.displayPercent, status: quota.status)
+                        Text("\(Int(quota.displayPercent.rounded()))%")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, alignment: .trailing)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 1)
     }
 
     private func bar(percent: Double, status: WidgetQuotaStatus) -> some View {

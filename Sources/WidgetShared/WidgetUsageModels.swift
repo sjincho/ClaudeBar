@@ -12,12 +12,18 @@ public enum WidgetQuotaStatus: String, Codable, Sendable {
 /// One quota gauge for an account (e.g. Session, Weekly, Sonnet).
 public struct WidgetQuota: Codable, Sendable, Hashable {
     public let label: String
+    /// Raw remaining percent — used to pick the most-depleted ("lowest") quota
+    /// and for status/color, independent of the display mode.
     public let percentRemaining: Double
+    /// The number to show + bar fill, already resolved for the app's display
+    /// mode (remaining vs used) so the widget doesn't need the setting.
+    public let displayPercent: Double
     public let status: WidgetQuotaStatus
 
-    public init(label: String, percentRemaining: Double, status: WidgetQuotaStatus) {
+    public init(label: String, percentRemaining: Double, displayPercent: Double, status: WidgetQuotaStatus) {
         self.label = label
         self.percentRemaining = percentRemaining
+        self.displayPercent = displayPercent
         self.status = status
     }
 }
@@ -55,10 +61,25 @@ public struct WidgetAccountUsage: Codable, Sendable, Identifiable, Hashable {
 public struct WidgetUsagePayload: Codable, Sendable {
     public let accounts: [WidgetAccountUsage]
     public let updatedAt: Date
+    /// "Remaining" or "Used" — how `displayPercent` should be labelled, mirroring
+    /// the app's usage display mode. Defaults to "Remaining" for older payloads.
+    public let displayModeLabel: String
 
-    public init(accounts: [WidgetAccountUsage], updatedAt: Date) {
+    public init(accounts: [WidgetAccountUsage], updatedAt: Date, displayModeLabel: String = "Remaining") {
         self.accounts = accounts
         self.updatedAt = updatedAt
+        self.displayModeLabel = displayModeLabel
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accounts, updatedAt, displayModeLabel
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accounts = try c.decode([WidgetAccountUsage].self, forKey: .accounts)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        displayModeLabel = try c.decodeIfPresent(String.self, forKey: .displayModeLabel) ?? "Remaining"
     }
 
     /// Encodes for transport (ISO-8601 dates). App and widget share this so the
