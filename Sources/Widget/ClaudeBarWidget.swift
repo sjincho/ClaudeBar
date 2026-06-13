@@ -57,14 +57,19 @@ private struct QuotaBar: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            // Collapse a projection if within 7 points of the current value.
-            let recent = quota.recent.flatMap { abs(clampPct($0.value) - current) >= 7 ? $0 : nil }
-            let sustained = quota.sustained.flatMap { p in
-                let c = clampPct(p.value)
+            // Always draw the projection MARK when there's real movement (>=2 pts
+            // off current, so a flat projection doesn't paint a tick on the fill
+            // edge). Only the NUMBER collapses when it would crowd a neighbor
+            // (within 7 pts) — otherwise a modest projection would vanish entirely.
+            let recent = quota.recent.flatMap { abs(clampPct($0.value) - current) >= 2 ? $0 : nil }
+            let sustained = quota.sustained.flatMap { abs(clampPct($0.value) - current) >= 2 ? $0 : nil }
+            let showRecentNum = recent.map { abs(clampPct($0.value) - current) >= 7 } ?? false
+            let showSustainedNum: Bool = sustained.map { s in
+                let c = clampPct(s.value)
                 let nearCurrent = abs(c - current) < 7
                 let nearRecent = recent.map { abs(c - clampPct($0.value)) < 7 } ?? false
-                return (nearCurrent || nearRecent) ? nil : p
-            }
+                return !(nearCurrent || nearRecent)
+            } ?? false
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: height / 2).fill(Color.secondary.opacity(0.18))
                 RoundedRectangle(cornerRadius: height / 2)
@@ -75,8 +80,8 @@ private struct QuotaBar: View {
                 if let s = sustained { caretMark(at: clampPct(s.value), w: w, color: statusColor(s.status)) }
 
                 numberInFill(Int(quota.displayPercent.rounded()), at: current, w: w)
-                if let r = recent { numberOnTrack(Int(r.value.rounded()), at: clampPct(r.value), color: statusColor(r.status), w: w) }
-                if let s = sustained { numberOnTrack(Int(s.value.rounded()), at: clampPct(s.value), color: statusColor(s.status), w: w) }
+                if let r = recent, showRecentNum { numberOnTrack(Int(r.value.rounded()), at: clampPct(r.value), color: statusColor(r.status), w: w) }
+                if let s = sustained, showSustainedNum { numberOnTrack(Int(s.value.rounded()), at: clampPct(s.value), color: statusColor(s.status), w: w) }
             }
         }
         .frame(height: height)
