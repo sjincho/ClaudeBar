@@ -16,3 +16,7 @@ build/
 
 # Personal Claude Code settings (per-project, never commit)
 .claude/settings.local.json
+
+# Local-only mise overrides (per-machine, e.g. code-signing identity)
+mise.local.toml
+.mise.local.toml
