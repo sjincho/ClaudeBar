@@ -111,6 +111,16 @@ public final class ClaudeProvider: MultiAccountProvider, @unchecked Sendable {
         return cachedDefaultInfo
     }
 
+    /// Re-reads the global account's identity (from `~/.claude.json`) so the
+    /// active account reflects an externally-changed default — e.g. the user
+    /// re-logged in or switched which account bare `claude` uses. This is a cheap
+    /// local read (no probe), so the UI can call it on every menu open even when
+    /// the usage data is still fresh and a full refresh is skipped.
+    public func refreshAccountIdentity() {
+        cachedDefaultInfo = defaultAccountInfoProvider?()
+        didResolveDefaultInfo = true
+    }
+
     /// The API probe for fetching usage data via HTTP API (optional)
     private let apiProbe: (any UsageProbe)?
 

@@ -123,6 +123,11 @@ struct MenuContentView: View {
             withAnimation(.easeOut(duration: 0.6)) {
                 animateIn = true
             }
+            // Always re-read which account is the system default (cheap, local
+            // read) so an externally-changed default (re-login / CLI switch)
+            // shows immediately — even when the usage probe below is skipped.
+            refreshActiveAccountIdentities()
+
             // Fetch data on open — but only if it's stale. Reopening the menu
             // with data refreshed in the last few minutes shouldn't re-probe; the
             // user can always force a refresh with the Refresh button.
@@ -132,6 +137,10 @@ struct MenuContentView: View {
                 } else {
                     await refresh(providerId: selectedProviderId)
                 }
+            } else {
+                // Usage is fresh (no probe), but republish so the widget reflects
+                // any default-account change picked up just above.
+                WidgetUsagePublisher.publish(from: monitor)
             }
 
             // Check for updates when menu opens (no UI unless update found)
@@ -164,6 +173,18 @@ struct MenuContentView: View {
     private func isFresh(_ provider: any AIProvider) -> Bool {
         guard let snapshot = provider.snapshot else { return false }
         return snapshot.age < Self.freshnessWindow
+    }
+
+    /// Re-reads the system-default account for the visible providers (cheap, no
+    /// probe), so the active account reflects an externally-changed default
+    /// regardless of the usage-data freshness gate.
+    private func refreshActiveAccountIdentities() {
+        let providers = settings.overviewModeEnabled
+            ? monitor.enabledProviders
+            : [monitor.provider(for: selectedProviderId)].compactMap { $0 }
+        for provider in providers {
+            (provider as? any MultiAccountProvider)?.refreshAccountIdentity()
+        }
     }
 
     /// Whether opening the menu should trigger a refresh: only when displayed

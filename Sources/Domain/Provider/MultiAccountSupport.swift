@@ -57,6 +57,10 @@ public protocol MultiAccountProvider: AIProvider {
 
     /// The account with the most remaining quota (best candidate for use).
     var bestAvailableAccount: ProviderAccount? { get }
+
+    /// Re-reads which account is the system default (cheaply, no probe) so the
+    /// active account reflects an externally-changed default. Defaults to a no-op.
+    func refreshAccountIdentity()
 }
 
 // MARK: - Default Implementations
@@ -74,6 +78,9 @@ public extension MultiAccountProvider {
     func refreshAllAccounts(_ kind: RefreshKind) async {
         await refreshAllAccounts()
     }
+
+    /// Default: no separate identity to refresh.
+    func refreshAccountIdentity() {}
 
     /// Default: aggregate status is the worst across all account snapshots
     var aggregateStatus: QuotaStatus {
