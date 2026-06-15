@@ -123,11 +123,15 @@ struct MenuContentView: View {
             withAnimation(.easeOut(duration: 0.6)) {
                 animateIn = true
             }
-            // Then fetch data in background
-            if settings.overviewModeEnabled {
-                await refreshAllEnabled()
-            } else {
-                await refresh(providerId: selectedProviderId)
+            // Fetch data on open — but only if it's stale. Reopening the menu
+            // with data refreshed in the last few minutes shouldn't re-probe; the
+            // user can always force a refresh with the Refresh button.
+            if shouldRefreshOnOpen {
+                if settings.overviewModeEnabled {
+                    await refreshAllEnabled()
+                } else {
+                    await refresh(providerId: selectedProviderId)
+                }
             }
 
             // Check for updates when menu opens (no UI unless update found)
@@ -143,9 +147,35 @@ struct MenuContentView: View {
             // app-lifetime loop in ClaudeBarApp, which restarts itself when the
             // selected or menu-bar provider changes.
             Task {
-                await refresh(providerId: newProviderId)
+                // Only re-probe the newly selected provider if its data is stale.
+                if let provider = monitor.provider(for: newProviderId), !isFresh(provider) {
+                    await refresh(providerId: newProviderId)
+                }
             }
         }
+    }
+
+    // MARK: - Refresh freshness
+
+    /// Data younger than this is considered fresh enough to skip an automatic
+    /// (menu-open / provider-switch) refresh. The Refresh button always forces one.
+    private static let freshnessWindow: TimeInterval = 300  // 5 minutes
+
+    private func isFresh(_ provider: any AIProvider) -> Bool {
+        guard let snapshot = provider.snapshot else { return false }
+        return snapshot.age < Self.freshnessWindow
+    }
+
+    /// Whether opening the menu should trigger a refresh: only when displayed
+    /// data is missing or stale.
+    private var shouldRefreshOnOpen: Bool {
+        if settings.overviewModeEnabled {
+            return monitor.enabledProviders.contains { !isFresh($0) }
+        }
+        if let provider = monitor.provider(for: selectedProviderId) {
+            return !isFresh(provider)
+        }
+        return true
     }
 
     // MARK: - Background Orbs
