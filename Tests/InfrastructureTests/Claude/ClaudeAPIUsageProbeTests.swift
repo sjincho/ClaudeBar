@@ -834,6 +834,39 @@ struct ClaudeAPIUsageProbeTokenRefreshTests {
         #expect(hitTokenEndpoint == false)
     }
 
+    @Test
+    func `probe with allowTokenRefresh refreshes an expired token and persists it`() async throws {
+        // Profile accounts (allowTokenRefresh: true) DO refresh + persist, so they
+        // stay live without the user running `claude` for them.
+        let tempDir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let pastExpiry = Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000
+        try createCredentialsFile(at: tempDir, accessToken: "old", refreshToken: "rt", expiresAt: pastExpiry)
+
+        let mockNetwork = MockNetworkClient()
+        given(mockNetwork).request(.any).willProduce { request in
+            if (request.url?.absoluteString ?? "").contains("oauth/token") {
+                let body = #"{ "access_token": "new-token", "refresh_token": "rt2", "expires_in": 3600 }"#.data(using: .utf8)!
+                return (body, HTTPURLResponse(url: URL(string: "https://platform.claude.com")!,
+                                              statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            let usage = #"{ "five_hour": { "utilization": 30.0 } }"#.data(using: .utf8)!
+            return (usage, HTTPURLResponse(url: URL(string: "https://api.anthropic.com")!,
+                                           statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+
+        let loader = ClaudeCredentialLoader(homeDirectory: tempDir.path, useKeychain: false)
+        let probe = ClaudeAPIUsageProbe(credentialLoader: loader, networkClient: mockNetwork, allowTokenRefresh: true)
+
+        let snapshot = try await probe.probe()
+        #expect(snapshot.quotas.first?.percentRemaining == 70.0) // 100 - 30
+        // The rotated token was persisted back to the credential file.
+        let path = tempDir.appendingPathComponent(".claude/.credentials.json")
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as! [String: Any]
+        #expect((saved["claudeAiOauth"] as? [String: Any])?["accessToken"] as? String == "new-token")
+    }
+
 }
 
 // MARK: - Setup-Token (Environment) Tests

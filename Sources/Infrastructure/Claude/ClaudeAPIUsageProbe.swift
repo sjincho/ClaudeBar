@@ -145,20 +145,35 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
     /// glancing at the menu bar isn't looking at hour-old data.
     public static let defaultSnapshotCacheTTL: TimeInterval = 15 * 60
 
-    // API endpoint (read-only usage probe; ClaudeBar never hits the OAuth token
-    // endpoint — the `claude` CLI owns token refresh, see probe()).
+    // API endpoints
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    // Token endpoint — used ONLY when `allowTokenRefresh` is set (profile accounts).
+    // The global/default account stays pure-reader and never hits this.
+    private static let refreshURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    // OAuth config (from Claude Code); client_id is the CLI's official one.
+    private static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private static let scopes = "user:profile user:inference user:sessions:claude_code"
+
+    /// When true, the probe refreshes an expiring OAuth token and persists the
+    /// rotated token back to the credential store. Enabled ONLY for per-config-dir
+    /// PROFILE accounts (so they stay live without the user running `claude` for
+    /// them). Left false for the global/default account, which stays pure-reader —
+    /// writing its Keychain item would reset the access gating the main `claude`
+    /// sessions depend on.
+    private let allowTokenRefresh: Bool
 
     public init(
         credentialLoader: ClaudeCredentialLoader = ClaudeCredentialLoader(),
         networkClient: any NetworkClient = URLSession.shared,
         timeout: TimeInterval = 15,
-        snapshotCacheTTL: TimeInterval = Self.defaultSnapshotCacheTTL
+        snapshotCacheTTL: TimeInterval = Self.defaultSnapshotCacheTTL,
+        allowTokenRefresh: Bool = false
     ) {
         self.credentialLoader = credentialLoader
         self.networkClient = networkClient
         self.timeout = timeout
         self.snapshotCache = SnapshotCache(ttl: snapshotCacheTTL)
+        self.allowTokenRefresh = allowTokenRefresh
     }
 
     public func isAvailable() async -> Bool {
@@ -194,18 +209,29 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
             cache.set(credentials)
         }
 
-        // Pure reader: ClaudeBar never refreshes or writes the OAuth token.
-        // Rotating it would require persisting the new token back to the Keychain,
-        // and any write to that `security`-CLI-created item resets its access
-        // gating — which breaks the `claude` CLI's own credential reads (it reads
-        // via `security find-generic-password`). The CLI owns refreshing; we only
-        // ever READ. If our token looks stale, we re-read the latest one the CLI
-        // wrote to disk/Keychain, but we never call the refresh endpoint ourselves.
-        if credentialLoader.needsRefresh(credentials.oauth),
-           let fresh = credentialLoader.loadCredentials(),
-           fresh.oauth != credentials.oauth {
-            credentials = fresh
-            cache.set(credentials)
+        // Token near/at expiry. PROFILE accounts (allowTokenRefresh) actively
+        // refresh + persist the rotated token so they stay live without the user
+        // running `claude` for them. The global/default account stays PURE-READER:
+        // never call the refresh endpoint or write the credential — that would
+        // rewrite the Keychain item the main `claude` sessions read and reset its
+        // access gating. A read-only probe just re-reads whatever the CLI wrote.
+        if credentialLoader.needsRefresh(credentials.oauth) {
+            if allowTokenRefresh, credentials.oauth.refreshToken != nil {
+                do {
+                    credentials = try await refreshToken(credentials)
+                } catch {
+                    // Refresh failed — fall back to whatever the CLI may have
+                    // written to disk; if nothing newer, let the fetch below 401.
+                    cache.clear()
+                    if let fresh = credentialLoader.loadCredentials(), fresh.oauth != credentials.oauth {
+                        credentials = fresh
+                        cache.set(credentials)
+                    }
+                }
+            } else if let fresh = credentialLoader.loadCredentials(), fresh.oauth != credentials.oauth {
+                credentials = fresh
+                cache.set(credentials)
+            }
         }
 
         // Fetch usage data
@@ -213,18 +239,24 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
         do {
             usageData = try await fetchUsage(accessToken: credentials.oauth.accessToken)
         } catch let error as ProbeError where error == .authenticationRequired {
-            // 401/403 — the token is expired/invalid. We do NOT refresh (that would
-            // write the credential). Re-read once in case the CLI just refreshed it;
-            // otherwise surface so the UI shows "re-auth via the CLI".
             cache.clear()
-            if let fresh = credentialLoader.loadCredentials(),
-               fresh.oauth != credentials.oauth,
-               let retry = try? await fetchUsage(accessToken: fresh.oauth.accessToken) {
+            if allowTokenRefresh, credentials.oauth.refreshToken != nil {
+                // Profile account: refresh once and retry.
+                do {
+                    credentials = try await refreshToken(credentials)
+                    usageData = try await fetchUsage(accessToken: credentials.oauth.accessToken)
+                } catch {
+                    throw ProbeError.sessionExpired(hint: "Run `claude` in terminal to refresh the token.")
+                }
+            } else if let fresh = credentialLoader.loadCredentials(),
+                      fresh.oauth != credentials.oauth,
+                      let retry = try? await fetchUsage(accessToken: fresh.oauth.accessToken) {
+                // Pure reader: pick up a token the CLI just refreshed on disk.
                 cache.set(fresh)
                 credentials = fresh
                 usageData = retry
             } else {
-                AppLog.probes.info("Claude API: token expired; ClaudeBar is read-only — run `claude` to refresh")
+                AppLog.probes.info("Claude API: token expired; run `claude` to refresh")
                 throw ProbeError.sessionExpired(hint: "Run `claude` in terminal to refresh the token.")
             }
         }
@@ -232,6 +264,70 @@ public struct ClaudeAPIUsageProbe: UsageProbe, @unchecked Sendable {
         let snapshot = parseUsageResponse(usageData, subscriptionType: credentials.oauth.subscriptionType)
         snapshotCache.set(snapshot)
         return snapshot
+    }
+
+    // MARK: - Token Refresh
+
+    /// Refreshes the OAuth token and persists it. Only reached for profile
+    /// accounts (`allowTokenRefresh`); never for the global/default account.
+    private func refreshToken(_ credentials: ClaudeCredentialResult) async throws -> ClaudeCredentialResult {
+        guard let refreshToken = credentials.oauth.refreshToken else {
+            AppLog.probes.error("Claude API: No refresh token available")
+            throw ProbeError.authenticationRequired
+        }
+
+        var request = URLRequest(url: Self.refreshURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeout
+
+        let body: [String: String] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": Self.clientID,
+            "scope": Self.scopes
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await networkClient.request(request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ProbeError.executionFailed("Invalid response from token refresh")
+        }
+
+        if httpResponse.statusCode == 400 || httpResponse.statusCode == 401 {
+            if let errorResponse = try? JSONDecoder().decode(TokenErrorResponse.self, from: data),
+               errorResponse.error == "invalid_grant" {
+                AppLog.probes.error("Claude API: Session expired (invalid_grant) - run `claude` to re-authenticate")
+            }
+            cache.clear()
+            throw ProbeError.sessionExpired(hint: "Run `claude` in terminal to log in again.")
+        }
+
+        guard httpResponse.statusCode >= 200, httpResponse.statusCode < 300 else {
+            throw ProbeError.executionFailed("Token refresh failed: HTTP \(httpResponse.statusCode)")
+        }
+
+        let refreshResponse = try JSONDecoder().decode(TokenRefreshResponse.self, from: data)
+        guard let newAccessToken = refreshResponse.accessToken, !newAccessToken.isEmpty else {
+            throw ProbeError.executionFailed("No access token in refresh response")
+        }
+
+        var updatedCredentials = credentials
+        updatedCredentials.oauth.accessToken = newAccessToken
+        if let newRefreshToken = refreshResponse.refreshToken {
+            updatedCredentials.oauth.refreshToken = newRefreshToken
+        }
+        if let expiresIn = refreshResponse.expiresIn {
+            updatedCredentials.oauth.expiresAt = Date().timeIntervalSince1970 * 1000 + Double(expiresIn) * 1000
+        }
+
+        // Persist the rotated token (SecItem in-place for keychain-sourced creds).
+        credentialLoader.saveCredentials(updatedCredentials)
+        cache.set(updatedCredentials)
+
+        AppLog.probes.info("Claude API: Token refreshed successfully")
+        return updatedCredentials
     }
 
     // MARK: - Usage Fetch
@@ -494,5 +590,27 @@ private struct ExtraUsageData: Decodable {
         case isEnabled = "is_enabled"
         case usedCredits = "used_credits"
         case monthlyLimit = "monthly_limit"
+    }
+}
+
+private struct TokenRefreshResponse: Decodable {
+    let accessToken: String?
+    let refreshToken: String?
+    let expiresIn: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+    }
+}
+
+private struct TokenErrorResponse: Decodable {
+    let error: String?
+    let errorDescription: String?
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case errorDescription = "error_description"
     }
 }

@@ -14,7 +14,12 @@ public struct ClaudeAccountAPIProbe: UsageProbe {
 
     public init(configDirectory: URL) {
         self.apiProbe = ClaudeAPIUsageProbe(
-            credentialLoader: ClaudeCredentialLoader(configDirectory: configDirectory.path)
+            credentialLoader: ClaudeCredentialLoader(configDirectory: configDirectory.path),
+            // Profile accounts refresh + persist their own (per-config-dir) token
+            // so they stay live without the user running `claude` for them. This
+            // is scoped to the profile's Keychain item — the global/default
+            // account (built without this flag) stays pure-reader.
+            allowTokenRefresh: true
         )
         self.resolver = ClaudeAccountInfoResolver(configDirectory: configDirectory)
     }
