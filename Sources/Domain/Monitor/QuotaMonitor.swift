@@ -82,7 +82,31 @@ public final class QuotaMonitor {
     /// Refreshes a single provider.
     /// `kind` defaults to `.interactive`; the background monitoring loop passes
     /// `.background` so providers can skip non-glanceable work (issue #204).
+    /// In-flight refresh per provider id. Concurrent triggers (menu open,
+    /// background poll, account switch, manual Refresh) all funnel through
+    /// `refreshProvider`; without coalescing they each fan out one API call PER
+    /// account, so a cold-start herd multiplied calls ~2–5× and tripped the usage
+    /// API's 429 throttle. Joining the in-flight refresh collapses the herd into
+    /// a single fan-out.
+    private var inFlightRefreshes: [String: Task<Void, Never>] = [:]
+
     private func refreshProvider(_ provider: any AIProvider, kind: RefreshKind = .interactive) async {
+        // Single-flight: if this provider is already refreshing, join that run
+        // instead of starting a redundant one (the joiner gets its fresh result).
+        if let existing = inFlightRefreshes[provider.id] {
+            await existing.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRefresh(provider, kind: kind)
+        }
+        inFlightRefreshes[provider.id] = task
+        await task.value
+        inFlightRefreshes[provider.id] = nil
+    }
+
+    private func performRefresh(_ provider: any AIProvider, kind: RefreshKind) async {
         guard await provider.isAvailable() else {
             return
         }
