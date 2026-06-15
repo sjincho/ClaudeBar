@@ -1,5 +1,21 @@
 import ProjectDescription
 
+// Local stable signing: set TUIST_CODESIGN_IDENTITY to a (self-signed) code-
+// signing certificate so the keychain "Always Allow" grant persists across
+// relaunches/rebuilds. Ad-hoc ("-", the default) has no stable identity, so
+// macOS re-prompts every launch. CI and contributors who don't set it stay
+// ad-hoc. Manual signing only — no team, no provisioning profile.
+// (Tuist sandboxes manifest env vars to its `Environment` API, so this is read
+// via TUIST_CODESIGN_IDENTITY, not a plain env var.)
+let codeSignIdentityValue = Environment.codesignIdentity.getString(default: "-")
+let codeSignIdentity: SettingValue = .string(codeSignIdentityValue)
+let codeSignStyle: SettingValue = .string(codeSignIdentityValue == "-" ? "Automatic" : "Manual")
+// SwiftUI preview / debug-dylib support injects extra nested dylibs that trip the
+// "embedded binary not signed with the same certificate" check under manual
+// signing. They're only needed for previews, so turn them off when signing with a
+// real cert (the default ad-hoc dev build keeps them on for previews).
+let previewsEnabled: SettingValue = .string(codeSignIdentityValue == "-" ? "YES" : "NO")
+
 let project = Project(
     name: "ClaudeBar",
     options: .options(
@@ -10,11 +26,11 @@ let project = Project(
         base: [
             "SWIFT_VERSION": "6.0",
             "MACOSX_DEPLOYMENT_TARGET": "15.0",
-            "ENABLE_DEBUG_DYLIB": "YES",
+            "ENABLE_DEBUG_DYLIB": previewsEnabled,
         ],
         debug: [
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG MOCKING",
-            "ENABLE_DEBUG_DYLIB": "YES",
+            "ENABLE_DEBUG_DYLIB": previewsEnabled,
         ],
         release: [
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "MOCKING",
@@ -105,7 +121,8 @@ let project = Project(
                     // Swift 5 mode: WidgetKit's closure-based TimelineProvider
                     // completion handlers don't satisfy Swift 6 `sending` rules.
                     "SWIFT_VERSION": "5",
-                    "CODE_SIGN_IDENTITY": "-",
+                    "CODE_SIGN_IDENTITY": codeSignIdentity,
+                    "CODE_SIGN_STYLE": codeSignStyle,
                 ]
             )
         ),
@@ -133,9 +150,10 @@ let project = Project(
             settings: .settings(
                 base: [
                     "SWIFT_STRICT_CONCURRENCY": "complete",
-                    "ENABLE_DEBUG_DYLIB": "YES",
-                    "ENABLE_PREVIEWS": "YES",
-                    "CODE_SIGN_IDENTITY": "-",
+                    "ENABLE_DEBUG_DYLIB": previewsEnabled,
+                    "ENABLE_PREVIEWS": previewsEnabled,
+                    "CODE_SIGN_IDENTITY": codeSignIdentity,
+                    "CODE_SIGN_STYLE": codeSignStyle,
                     "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
                 ],
                 debug: [
